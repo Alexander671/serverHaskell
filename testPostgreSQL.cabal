@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 6e4b94040a5fb55ebadd6898466b04d1c47d199c42ca96896d8ad8a629fc766a
+-- hash: c548029b2c30c59468d585d0a3494268dc1cf9352597d903592fd35bad5be648
 
 name:           testPostgreSQL
 version:        0.1.0.0
@@ -40,6 +40,8 @@ library
     , hasql
     , http-types
     , text
+    , time
+    , uri-encode
     , utf8-string
     , wai
     , warp
@@ -63,6 +65,8 @@ executable testPostgreSQL-exe
     , http-types
     , testPostgreSQL
     , text
+    , time
+    , uri-encode
     , utf8-string
     , wai
     , warp
@@ -85,6 +89,8 @@ test-suite testPostgreSQL-test
     , http-types
     , testPostgreSQL
     , text
+    , time
+    , uri-encode
     , utf8-string
     , wai
     , warp

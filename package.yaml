@@ -31,6 +31,8 @@ dependencies:
 - bytestring
 - aeson
 - utf8-string
+- time
+- uri-encode
 
 library:
   source-dirs: src
