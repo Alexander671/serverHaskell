@@ -33,6 +33,7 @@ dependencies:
 - utf8-string
 - time
 - uri-encode
+- jwt
 
 library:
   source-dirs: src

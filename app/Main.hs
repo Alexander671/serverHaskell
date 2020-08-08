@@ -5,6 +5,8 @@ module Main where
 import Lib
 import DB
 --import JWT
+import qualified Hasql.Decoders as HD (Result)
+import qualified Hasql.Encoders as HE (Params)
 import Web.JWT as JWT (ClaimsMap, unregisteredClaims, 
                        claims, header, unClaimsMap, signature,
                        Signer(HMACSecret), decode,decodeAndVerifySignature) 
@@ -17,17 +19,16 @@ import qualified Data.ByteString.Lazy     as LBS
 {----------------------------------------}
 import           Data.Map.Strict       (toList, Map, fromList, keys, lookup) 
 import           Data.Text                as DT 
-import Network.URI.Encode (decodeBSToText,encodeTextToBS)      
+import           Network.URI.Encode (decodeBSToText,encodeTextToBS)      
 {----------------------------------------}
 import           Network.HTTP.Types       (Status, badRequest400, hContentType,
-                                           methodGet, methodDelete, methodPut, notFound404, status200,
+                                           methodGet, methodDelete, methodPut, methodPost, notFound404, status200,
                                            statusCode)
- 
 import           Network.Wai              (Application, ResponseReceived, Request, Middleware, Response,
                                            queryString, pathInfo,
                                            rawQueryString, requestMethod,
                                            responseLBS, responseStatus)
-import Network.Wai.Handler.Warp (run)
+import           Network.Wai.Handler.Warp (run)
 {----------------------------------------}
 import Data.Aeson as DA
 import Data.Time (Day)
@@ -42,6 +43,8 @@ type PathResult      = BS.ByteString
 type PathSpec        = ( PathDescription
                            , (PathArg -> PathResult) )
 
+yousecret = "your_secret" -- for jwt
+
 -- Main function
 
 main :: IO ()
@@ -49,87 +52,99 @@ main = do
   putStrLn "Serving (hit Ctrl+C to stop)..."
   run 8000 (application)
 
--- web app
+-- Web app
+-- Parse of token and taking user role
 application :: Application
 application req respond =              
       case (fmap (Prelude.lookup "userRole") $ jwtcheck route) of
-       Just (Just role) -> application2 role req respond
-       Just (Nothing)   -> respond $ responseBadRequestJSON "error: 1"
-       Nothing          -> respond $ responseBadRequestJSON "error: 2"
+       Just (Just role) -> application2 (encode role) req respond
+       Nothing          -> respond $ responseBadRequestJSON $ DA.encode ("error: 2"::Text)
       ----------------------------
-      where route = unpack $ Prelude.head $ head1 (pathInfo req)
-            jwtcheck content = fmap (toList . unClaimsMap . unregisteredClaims . JWT.claims) (JWT.decodeAndVerifySignature (HMACSecret "your secret") $ DT.pack content)
+      where route = unpack $ Prelude.head $ helphead (pathInfo req)
+            jwtcheck content = fmap (toList . unClaimsMap . unregisteredClaims . JWT.claims) (JWT.decodeAndVerifySignature (HMACSecret yousecret) $ DT.pack content)
+            helphead [] = ["error: empty list"]
+            helphead (x:xs) = [x]
 
-head1 [] = ["error: empty list"]
-head1 (x:xs) = [x]
 
-
-application2 :: Value -> Application
-application2 role req respond
-  | requestMethod req == methodGet =
+application2 :: ByteString -> Application
+application2 role req respond = 
   case pathInfo req of
-    (_:"news":_)     -> routeNews     req respond   
-    (_:"autors":_)   -> routeAutors   req respond
-    (_:"users":_)    -> routeUsers    req respond
-    (_:"comments":_) -> routeComments req respond
+    (_:"news":_)     -> routeNews     role req respond   
+    (_:"autors":_)   -> routeAutors   role req respond
+    (_:"users":_)    -> routeUsers    role req respond
+    (_:"comments":_) -> routeComments role req respond
     _              -> respond $ responseOkJSON $ encode ("error"::Text)  
-  | otherwise =
-    respond $ responseBadRequestJSON "Only GET method is allowed!"
 
-routeNews :: Application
-routeNews req respond = 
+routeNews :: ByteString -> Application
+routeNews role req respond = 
     case pathInfo req of
-    [_,"news"] -> dbNews "SELECT * FROM news;" req respond
+    [_,"news"] -> dbQuery someNewsDecoder "SELECT * FROM news;" req respond
     [_,"news","filter"] ->
         case queryString req of 
-        _:("date_of_create_at_gt",Just x):xs -> dbNews (BS.pack $ "SELECT * FROM news WHERE date_of_create > '" ++ show x ++ "';") req respond
-        _:("date_of_create_at_lt",Just x):xs -> dbNews (BS.pack $ "SELECT * FROM news WHERE date_of_create < '" ++ show x ++ "';") req respond
-        _:("name_of_autor", Just x):xs       -> dbNews (BS.pack $ "SELECT n.*, u.second_name, u.first_name FROM news n, users u WHERE n.autor_id = u.user_id  AND u.first_name = '" ++ show x ++ "';") req respond
-        _:("category", Just x):xs            -> dbNews (BS.pack $ "SELECT * FROM news WHERE category = '" ++ BS.unpack x ++ "';") req respond
+        ("date_of_create_at_gt",Just x):xs -> dbQuery someNewsDecoder (BS.pack $ "SELECT * FROM news WHERE date_of_create > '" ++ show x ++ "';") req respond
+        ("date_of_create_at_lt",Just x):xs -> dbQuery someNewsDecoder (BS.pack $ "SELECT * FROM news WHERE date_of_create < '" ++ show x ++ "';") req respond
+        ("name_of_autor", Just x):xs       -> dbQuery someNewsDecoder (BS.pack $ "SELECT n.*, u.second_name, u.first_name FROM news n, users u WHERE n.autor_id = u.user_id  AND u.first_name = '" ++ show x ++ "';") req respond
+        ("category", Just x):xs            -> dbQuery someNewsDecoder (BS.pack $ "SELECT * FROM news WHERE category = '" ++ BS.unpack x ++ "';") req respond
         -- name_of_autor, изменить структуру бд, а также типы в Types, сделать поле user... ::Users 
         _  -> respond $ responseNotFoundJSON $ encode ("error" ::Text)
     [_,"news","order"] ->
         case queryString req of
         [] -> respond $ responseNotFoundJSON $ encode ("error" ::Text)
-        _:("date_of_create",Just x):xs  -> dbNews (BS.pack $ "SELECT * FROM news ORDER BY date_of_create " ++ show x ++ "';") req respond
-        _:("category",Just x):xs        -> dbNews (BS.pack $ "SELECT * FROM news ORDER BY category " ++ BS.unpack x ++ ";") req respond
-        _:("name_of_autor", Just x):xs  -> dbNews (BS.pack $ "SELECT n.*, u.second_name, u.first_name FROM news n, users u WHERE n.autor_id = u.user_id  ORDER BY u.first_name " ++ BS.unpack x ++ ";") req respond
+        ("date_of_create",Just x):xs  -> dbQuery someNewsDecoder (BS.pack $ "SELECT * FROM news ORDER BY date_of_create " ++ show x ++ "';") req respond
+        ("category",Just x):xs        -> dbQuery someNewsDecoder (BS.pack $ "SELECT * FROM news ORDER BY category " ++ BS.unpack x ++ ";") req respond
+        ("name_of_autor", Just x):xs  -> dbQuery someNewsDecoder (BS.pack $ "SELECT n.*, u.second_name, u.first_name FROM news n, users u WHERE n.autor_id = u.user_id  ORDER BY u.first_name " ++ BS.unpack x ++ ";") req respond
         _ -> respond $ responseNotFoundJSON $ encode ("error" ::Text)
         {------------------------------------------------------------}
+    _ -> respond $ responseNotFoundJSON $ encode ("error" ::Text)
 
-dbNews :: BS.ByteString ->  Application
-dbNews sql req respond = do 
-  res <- connectToDB sql someAutorsDecoder
-  (respond $ responseOkJSON
-              (case rawQueryString req of
-                "" -> encode res
-                _  -> encode ("error"::Text))) 
-              
+routeAutors ::  ByteString -> Application
+routeAutors role req respond  
+  | role == "Admin" =
+   case requestMethod req of
+      methodGet  ->  case pathInfo req of  
+               [_,"autors"] -> dbQuery someAutorsDecoder "SELECT * FROM news;" req respond
+               _            -> respond $ responseNotFoundJSON $ encode ("error" ::Text)
+      methodPost -> case lookupStuff ["user_id","description","news_id"] req of 
+               ([Just(Just x),Just (Just y),Just (Just z)]) -> respond $ responseOkJSON "all is okays"
+               _ ->   respond $ responseNotFoundJSON $ encode ("Problem with queryString" ::Text)
+               where  lookupStuff []        lst = []
+                      lookupStuff (stuff:s) lst = (Prelude.lookup stuff $ queryString lst) : (lookupStuff s lst)
+      _ ->  respond $ responseNotFoundJSON $ encode ("Problem with rqstMethod" ::Text)
+    {------------------------------------------------------------}
+  | otherwise = respond $ responseNotFoundJSON $ encode (pack ("Problem with role, current role is " ++ show role))
 
-routeAutors :: Application
-routeAutors req respond = do
-    res <- connectToDB "SELECT * FROM autors;" someAutorsDecoder
-    (respond $ responseOkJSON
-              (case rawQueryString req of
-                "" -> encode res
-                _  -> encode ("error"::Text))) 
-
-routeUsers :: Application
-routeUsers req respond = do
+routeUsers :: ByteString ->  Application
+routeUsers role req respond = do
     res <- connectToDB "SELECT * FROM users;" someUsersDecoder
     (respond $ responseOkJSON
               (case rawQueryString req of
                 "" -> encode res
                 _  -> encode ("Not available path"::Text))) 
 
-routeComments :: Application
-routeComments req respond = do
+routeComments ::  ByteString ->  Application
+routeComments role req respond = do
     res <- connectToDB "SELECT * FROM comments;" someCommentsDecoder
     (respond $ responseOkJSON
               (case rawQueryString req of
                 "" -> encode res
                 _  -> encode ("Not available path"::Text))) 
 
+dbQuery :: ToJSON a => HD.Result [a] -> BS.ByteString ->  Application
+dbQuery dec sql req respond = do 
+  res <- connectToDB "SELECT * FROM news;" dec
+  (respond $ responseOkJSON
+              (case rawQueryString req of
+                "" -> encode res
+                _  -> encode ("error12"::Text)))               
+
+{-dbQueryPut :: ToJSON a => HE.Params a -> BS.ByteString ->  Application
+dbQueryPut enc sql req respond = do
+  res <- connectToDB "SELECT * FROM news;" enc
+  (respond $ responseOkJSON
+              (case rawQueryString req of
+                "" -> encode res
+                _  -> encode ("error12"::Text))) 
+-}
 responseOkJSON,responseNotFoundJSON,responseBadRequestJSON :: ByteString -> Response
 responseOkJSON = responsePlainTextJSON status200
 responseNotFoundJSON = responsePlainTextJSON notFound404
