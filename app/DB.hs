@@ -21,9 +21,8 @@ import Data.Foldable                      as DF
 import Data.Functor.Contravariant 
 {------------------------------------}
 
-
-connectToDB :: BS.ByteString -> HD.Result [a] -> IO [a]
-connectToDB query dec =
+connectToDB :: b -> BS.ByteString -> HD.Result [a] -> HE.Params b -> IO [a]
+connectToDB data1 query dec enc  =
   let
     connectionSettings :: HC.Settings
     connectionSettings =
@@ -40,23 +39,25 @@ connectToDB query dec =
       Left Nothing -> error "Unspecified connection error"
       Right connection ->  do
         putStrLn "Acquired connection!"
-        queryResult <- HS.run (selectTasksSession query dec) connection
+        queryResult <- HS.run (selectTasksSession data1 query dec enc) connection
         HC.release connection
         case queryResult of
           Right result -> return result
           Left err -> error $ show err
 
 
-selectTasksSession :: BS.ByteString -> HD.Result [a]  -> HS.Session [a]
-selectTasksSession query dec = HS.statement () $ selectTasksStatement query dec
+selectTasksSession :: b -> BS.ByteString -> HD.Result [a] -> HE.Params b -> HS.Session [a]
+selectTasksSession data1 query dec enc = HS.statement data1 (selectTasksStatement query dec enc) 
 
-selectTasksStatement :: BS.ByteString -> HD.Result [a]  -> HST.Statement () [a]
-selectTasksStatement query dec =
-  HST.Statement
-    query
-    HE.noParams
-    dec
-    True
+
+selectTasksStatement ::  BS.ByteString -> HD.Result [a] -> HE.Params b -> HST.Statement b [a]
+selectTasksStatement sql dec enc =
+             HST.Statement 
+             sql
+             enc
+             dec
+             True
+
 
 
 {-Encoder for type News-}
