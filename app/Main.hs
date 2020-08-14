@@ -134,9 +134,9 @@ routeDrafts role req respond =
         case role of
            "\"Autor\"" -> 
                case pathInfo req of 
-                (_:"drafts":"publish":_) -> case fmap join (lookupStuff ["id_of_draft","text_of_draft"] req)
+                 --(_:"drafts":"publish":_) -> case fmap join (lookupStuff ["id_of_draft","text_of_draft"] req)
                 {---------------------------------------------}
-                _ -> case requestMethod req of 
+                 _ -> case requestMethod req of 
                           "GET" -> dbQuery someDraftsDecoder HE.noParams (selectsql req) req respond
                           {-----------------------------------------------------------------}
                           "POST" -> case fmap join (lookupStuff ["id_of_draft","text_of_draft"] req) of 
