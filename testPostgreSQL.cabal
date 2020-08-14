@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 64c21a3eef730228b0eb095f6a26171f6fc57f5ed9f2264a3cf084829db8062c
+-- hash: 222537a5214b719939e130bc2a03bc81b0ae601b0ed4d0d88cc97fd5dbd2016d
 
 name:           testPostgreSQL
 version:        0.1.0.0
@@ -44,6 +44,7 @@ library
     , time
     , uri-encode
     , utf8-string
+    , vector
     , wai
     , warp
   default-language: Haskell2010
@@ -52,7 +53,6 @@ executable testPostgreSQL-exe
   main-is: Main.hs
   other-modules:
       DB
-      JWT
       Types
       Paths_testPostgreSQL
   hs-source-dirs:
@@ -71,6 +71,7 @@ executable testPostgreSQL-exe
     , time
     , uri-encode
     , utf8-string
+    , vector
     , wai
     , warp
   default-language: Haskell2010
@@ -96,6 +97,7 @@ test-suite testPostgreSQL-test
     , time
     , uri-encode
     , utf8-string
+    , vector
     , wai
     , warp
   default-language: Haskell2010

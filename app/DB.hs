@@ -8,6 +8,7 @@ import qualified Hasql.Decoders as HD
 import qualified Hasql.Encoders as HE
 import qualified Hasql.Statement as HST
 {------------------------------------}
+import Data.Vector
 import Data.Text 
 import Network.URI.Encode (decodeBSToText,encodeTextToBS)
 {------------------------------------}
@@ -19,10 +20,11 @@ import qualified Control.Monad
 import Data.Foldable                      as DF
 {------------------------------------}
 import Data.Functor.Contravariant 
+
 {------------------------------------}
 
-connectToDB :: b -> BS.ByteString -> HD.Result [a] -> HE.Params b -> IO [a]
-connectToDB data1 query dec enc  =
+connectToDB :: BS.ByteString -> HD.Result (Vector a) -> IO (Vector a)
+connectToDB query dec  =
   let
     connectionSettings :: HC.Settings
     connectionSettings =
@@ -39,22 +41,22 @@ connectToDB data1 query dec enc  =
       Left Nothing -> error "Unspecified connection error"
       Right connection ->  do
         putStrLn "Acquired connection!"
-        queryResult <- HS.run (selectTasksSession data1 query dec enc) connection
+        queryResult <- HS.run (selectTasksSession query dec) connection
         HC.release connection
         case queryResult of
           Right result -> return result
           Left err -> error $ show err
 
 
-selectTasksSession :: b -> BS.ByteString -> HD.Result [a] -> HE.Params b -> HS.Session [a]
-selectTasksSession data1 query dec enc = HS.statement data1 (selectTasksStatement query dec enc) 
+selectTasksSession ::  BS.ByteString -> HD.Result (Vector a) -> HS.Session (Vector a)
+selectTasksSession  query dec = HS.statement () (selectTasksStatement query dec) 
 
 
-selectTasksStatement ::  BS.ByteString -> HD.Result [a] -> HE.Params b -> HST.Statement b [a]
-selectTasksStatement sql dec enc =
+selectTasksStatement ::  BS.ByteString -> HD.Result (Vector a) -> HST.Statement () (Vector a)
+selectTasksStatement sql dec =
              HST.Statement 
              sql
-             enc
+             HE.noParams
              dec
              True
 
@@ -72,8 +74,8 @@ someNewsEncoder =
           (fromIntegral . id_of_new >$< HE.param (HE.nonNullable HE.int8)) 
 
 {-Decoder-}
-someNewsDecoder :: HD.Result [News]
-someNewsDecoder =  HD.rowList $ Types.News <$> 
+someNewsDecoder :: HD.Result (Vector News)
+someNewsDecoder =  HD.rowVector $ Types.News <$> 
           (HD.column (HD.nonNullable HD.text)) <*>
           (HD.column (HD.nullable HD.date)) <*>
           (HD.column (HD.nullable HD.text)) <*>
@@ -90,8 +92,8 @@ someAutorsEncoder =
           (news_id >$< HE.param (HE.nullable $ HE.array $ HE.dimension DF.foldl' $ HE.element $ HE.nonNullable $ contramap fromIntegral HE.int8))
 
 {-Decoder-}
-someAutorsDecoder :: HD.Result [Autors]
-someAutorsDecoder = HD.rowList $ Types.Autors <$>
+someAutorsDecoder :: HD.Result (Vector Autors)
+someAutorsDecoder = HD.rowVector $ Types.Autors <$>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
           (HD.column (HD.nullable HD.text)) <*>
           (HD.column $ HD.nullable $ HD.array $ HD.dimension Control.Monad.replicateM (HD.element (HD.nonNullable (fromIntegral <$> HD.int8)))) 
@@ -107,8 +109,8 @@ someUsersEncoder =
           (second_name >$< HE.param (HE.nonNullable HE.text)) 
 
 {-Decoder-}
-someUsersDecoder :: HD.Result [Users]
-someUsersDecoder = HD.rowList $ Types.Users <$>
+someUsersDecoder :: HD.Result (Vector Users)
+someUsersDecoder = HD.rowVector $ Types.Users <$>
           (HD.column (HD.nullable $ decodeBSToText <$> HD.bytea)) <*>
           (HD.column (HD.nonNullable HD.date)) <*>
           (HD.column (HD.nonNullable HD.bool)) <*>
@@ -124,10 +126,65 @@ someCommentsEncoder =
           (fromIntegral . id_of_comment >$< HE.param (HE.nonNullable HE.int8))
 
 {-Decoder-}
-someCommentsDecoder :: HD.Result [Comments]
-someCommentsDecoder = HD.rowList $ Types.Comments <$>
+someCommentsDecoder :: HD.Result (Vector Comments)
+someCommentsDecoder = HD.rowVector $ Types.Comments <$>
           (HD.column (HD.nonNullable HD.text)) <*>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) 
           
+{-Encoder for type Draft-}
+someDraftsEncoder :: HE.Params Draft                      
+someDraftsEncoder = 
+          (fromIntegral . id_of_draft >$< HE.param (HE.nonNullable HE.int8)) <>
+          (fromIntegral . id_of_user  >$< HE.param (HE.nonNullable HE.int8)) <>
+          (text_of_draft >$< HE.param (HE.nonNullable HE.text))
+          
+
+
+{-Decoder-}
+someDraftsDecoder :: HD.Result (Vector Draft)
+someDraftsDecoder = HD.rowVector $ Types.Draft <$>
+          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
+          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
+          (HD.column (HD.nonNullable HD.text)) 
+
+
+
+connectToDB2 :: a -> BS.ByteString -> HE.Params a -> IO ()
+connectToDB2 data1 query enc =
+  let
+    connectionSettings :: HC.Settings
+    connectionSettings =
+      HC.settings
+        "localhost"
+        (fromInteger 5432)
+        "postgres"
+        "password"
+        ""
+  in do
+    connectionResult <- HC.acquire connectionSettings
+    case connectionResult of
+      Left (Just errMsg) -> error $ BS.unpack errMsg
+      Left Nothing -> error "Unspecified connection error"
+      Right connection ->  do
+        putStrLn "Acquired connection!"
+        queryResult <- HS.run (selectTasksSession2 data1 query enc) connection
+        HC.release connection
+        case queryResult of
+          Right result -> return result
+          Left err -> error $ show err
+
+
+selectTasksSession2 :: a ->  BS.ByteString -> HE.Params a -> HS.Session ()
+selectTasksSession2  data1 query enc = HS.statement data1 (selectTasksStatement2 query enc) 
+
+
+selectTasksStatement2 ::  BS.ByteString ->  HE.Params a -> HST.Statement a ()
+selectTasksStatement2 sql enc =
+             HST.Statement 
+             sql
+             enc
+             HD.noResult
+             True
+
             
