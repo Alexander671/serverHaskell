@@ -1,3 +1,4 @@
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings, DeriveGeneric #-}
 module DB where
 import Types
@@ -20,10 +21,12 @@ import qualified Control.Monad
 import Data.Foldable                      as DF
 {------------------------------------}
 import Data.Functor.Contravariant 
+import Data.Aeson (ToJSON, encode)
+import Data.Aeson (decode)
 
 {------------------------------------}
 
-connectToDB :: BS.ByteString -> HD.Result (Vector a) -> IO (Vector a)
+connectToDB :: ToJSON a => BS.ByteString -> HD.Result (Vector a) -> IO (Status a)
 connectToDB query dec  =
   let
     connectionSettings :: HC.Settings
@@ -44,8 +47,12 @@ connectToDB query dec  =
         queryResult <- HS.run (selectTasksSession query dec) connection
         HC.release connection
         case queryResult of
-          Right result -> return result
-          Left err -> error $ show err
+          Right result1 -> do
+                        putStrLn $ show $ encode $ Status {ok=True,result=Just $ Result (Just result1),error_description=Nothing,error_id=Nothing}
+                        return $ Status {ok=True,result=Just $ Result (Just result1),error_description=Nothing,error_id=Nothing} -- понять какой тип использовать для ошибки
+          Left err -> do
+                     putStrLn $ show $ encode (Status {ok=False,result=Nothing,error_description=Just $ show err,error_id=Just 404} :: Types.Status News)
+                     return $ Status {ok=False,result=Nothing,error_description=Just "problem with db",error_id=Just 404}
 
 
 selectTasksSession ::  BS.ByteString -> HD.Result (Vector a) -> HS.Session (Vector a)
@@ -66,24 +73,24 @@ selectTasksStatement sql dec =
 someNewsEncoder :: HE.Params News
 someNewsEncoder = 
           (name >$< HE.param (HE.nonNullable HE.text)) <>
-          (date_of_create_new >$< HE.param (HE.nullable HE.date)) <>
-          (fromIntegral . autor_id >$< HE.param (HE.nonNullable HE.int8)) <>
           (category >$< HE.param (HE.nullable HE.text)) <>
           (tags >$< HE.param (HE.nullable $ HE.array $ HE.dimension DF.foldl' $ HE.element $ HE.nonNullable HE.text)) <>
           (text_of_new >$< HE.param (HE.nullable HE.text)) <>
-          (fromIntegral . id_of_new >$< HE.param (HE.nonNullable HE.int8)) 
+          (fromIntegral . autor_id >$< HE.param (HE.nonNullable HE.int8)) <>
+          (fromIntegral . id_of_new >$< HE.param (HE.nonNullable HE.int8)) <> 
+          (date_of_create_new >$< HE.param (HE.nullable HE.date))          
 
 {-Decoder-}
 someNewsDecoder :: HD.Result (Vector News)
 someNewsDecoder =  HD.rowVector $ Types.News <$> 
           (HD.column (HD.nonNullable HD.text)) <*>
-          (HD.column (HD.nullable HD.date)) <*>
           (HD.column (HD.nullable HD.text)) <*>
           (HD.column $ HD.nullable $ HD.array $ HD.dimension Control.Monad.replicateM (HD.element (HD.nonNullable HD.text))) <*>
           (HD.column (HD.nullable HD.text)) <*>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
-          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8)))
-          
+          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
+          (HD.column (HD.nullable HD.date))
+
 {-Encoder for type Autors-}
 someAutorsEncoder :: HE.Params Autors
 someAutorsEncoder =  

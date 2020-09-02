@@ -35,6 +35,7 @@ dependencies:
 - uri-encode
 - jwt
 - vector
+- hasql-th
 
 library:
   source-dirs: src

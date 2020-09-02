@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 222537a5214b719939e130bc2a03bc81b0ae601b0ed4d0d88cc97fd5dbd2016d
+-- hash: a5109b36a7b2a012df74330e95cbc38e168984a6f19732915decd154018bfe6c
 
 name:           testPostgreSQL
 version:        0.1.0.0
@@ -38,6 +38,7 @@ library
     , bytestring
     , containers
     , hasql
+    , hasql-th
     , http-types
     , jwt
     , text
@@ -64,6 +65,7 @@ executable testPostgreSQL-exe
     , bytestring
     , containers
     , hasql
+    , hasql-th
     , http-types
     , jwt
     , testPostgreSQL
@@ -90,6 +92,7 @@ test-suite testPostgreSQL-test
     , bytestring
     , containers
     , hasql
+    , hasql-th
     , http-types
     , jwt
     , testPostgreSQL

@@ -2,20 +2,39 @@
 module Types where
 
 import Data.Text
-import Data.Aeson
+import Data.Aeson hiding (Result)
 import Data.ByteString.Char8    (ByteString)
 import Data.Time (Day)
 import           GHC.Generics             hiding (from )
+import Data.Vector (Vector)
 {-----------------------}
+
+data Status a  = Status 
+  { ok :: Bool,
+    result :: Maybe (Result a),
+    error_description :: Maybe String,
+    error_id :: Maybe Integer
+  } deriving (Show, Generic)
+
+instance FromJSON a => FromJSON (Status a) where
+instance ToJSON a => ToJSON (Status a) where
+
+data Result a = Result 
+  { 
+    news :: Maybe (Vector a)
+  } deriving (Show, Generic)
+
+instance FromJSON a => FromJSON (Result a) where
+instance ToJSON a => ToJSON (Result a) where
 
 data News = News 
   { name :: Text,
-    date_of_create_new :: Maybe Day,
     category :: Maybe Text,
     tags :: Maybe [Text],
     text_of_new :: Maybe Text,
     id_of_new :: Integer,
-    autor_id :: Integer
+    autor_id :: Integer,
+    date_of_create_new :: Maybe Day
     
   } deriving (Show, Generic)
 
