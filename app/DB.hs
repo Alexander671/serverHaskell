@@ -9,7 +9,7 @@ import qualified Hasql.Decoders as HD
 import qualified Hasql.Encoders as HE
 import qualified Hasql.Statement as HST
 {------------------------------------}
-import Data.Vector
+import Data.Vector ( Vector )
 import Data.Text 
 import Network.URI.Encode (decodeBSToText,encodeTextToBS)
 {------------------------------------}
@@ -18,9 +18,10 @@ import           Data.ByteString.Lazy     (ByteString)
 import qualified Data.ByteString.Lazy     as LBS
 {------------------------------------}
 import qualified Control.Monad
-import Data.Foldable                      as DF
+import Data.Foldable as DF ( Foldable(foldl') )
 {------------------------------------}
-import Data.Functor.Contravariant 
+import Data.Functor.Contravariant
+    ( Contravariant(contramap), (>$<) ) 
 import Data.Aeson (ToJSON, encode)
 import Data.Aeson (decode)
 
@@ -48,11 +49,11 @@ connectToDB query dec  =
         HC.release connection
         case queryResult of
           Right result1 -> do
-                        putStrLn $ show $ encode $ Status {ok=True,result=Just $ Result (Just result1),error_description=Nothing,error_id=Nothing}
-                        return $ Status {ok=True,result=Just $ Result (Just result1),error_description=Nothing,error_id=Nothing} -- понять какой тип использовать для ошибки
+                        putStrLn $ show $ encode $ Status {ok=True,result=Just result1,error_description=Nothing,error_id=Nothing}
+                        return $ Status {ok=True,result=Just $ result1,error_description=Nothing,error_id=Nothing} -- понять какой тип использовать для ошибки
           Left err -> do
                      putStrLn $ show $ encode (Status {ok=False,result=Nothing,error_description=Just $ show err,error_id=Just 404} :: Types.Status News)
-                     return $ Status {ok=False,result=Nothing,error_description=Just "problem with db",error_id=Just 404}
+                     return $ Status {ok=False,result=Nothing,error_description=Just "problem with syntax",error_id=Just 404}
 
 
 selectTasksSession ::  BS.ByteString -> HD.Result (Vector a) -> HS.Session (Vector a)
@@ -128,16 +129,19 @@ someUsersDecoder = HD.rowVector $ Types.Users <$>
 {-Encoder for type Comment-}
 someCommentsEncoder :: HE.Params Comments                      
 someCommentsEncoder = 
-          (text_of_comment >$< HE.param (HE.nonNullable HE.text)) <>
+          (fromIntegral . id_of_comment >$< HE.param (HE.nonNullable HE.int8)) <>
           (fromIntegral . user_id_comment >$< HE.param (HE.nonNullable HE.int8)) <>
-          (fromIntegral . id_of_comment >$< HE.param (HE.nonNullable HE.int8))
+          (fromIntegral . id_of_new_comment >$< HE.param (HE.nonNullable HE.int8)) <>
+          (text_of_comment >$< HE.param (HE.nonNullable HE.text)) 
+          
 
 {-Decoder-}
 someCommentsDecoder :: HD.Result (Vector Comments)
 someCommentsDecoder = HD.rowVector $ Types.Comments <$>
-          (HD.column (HD.nonNullable HD.text)) <*>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
-          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) 
+          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*> 
+          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
+          (HD.column (HD.nonNullable HD.text)) 
           
 {-Encoder for type Draft-}
 someDraftsEncoder :: HE.Params Draft                      

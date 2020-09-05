@@ -11,7 +11,7 @@ import Data.Vector (Vector)
 
 data Status a  = Status 
   { ok :: Bool,
-    result :: Maybe (Result a),
+    result :: Maybe (Vector a),
     error_description :: Maybe String,
     error_id :: Maybe Integer
   } deriving (Show, Generic)
@@ -19,13 +19,6 @@ data Status a  = Status
 instance FromJSON a => FromJSON (Status a) where
 instance ToJSON a => ToJSON (Status a) where
 
-data Result a = Result 
-  { 
-    news :: Maybe (Vector a)
-  } deriving (Show, Generic)
-
-instance FromJSON a => FromJSON (Result a) where
-instance ToJSON a => ToJSON (Result a) where
 
 data News = News 
   { name :: Text,
@@ -63,9 +56,10 @@ instance FromJSON Users where
 instance ToJSON Users where
 
 data Comments = Comments
-  { text_of_comment :: Text,
+  { id_of_comment   :: Integer,
     user_id_comment :: Integer,
-    id_of_comment   :: Integer
+    id_of_new_comment :: Integer,
+    text_of_comment :: Text
   } deriving (Show, Generic)
 
 instance FromJSON Comments where                            

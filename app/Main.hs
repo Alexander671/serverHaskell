@@ -13,10 +13,11 @@ import Web.JWT as JWT (ClaimsMap, unregisteredClaims,
                        Signer(HMACSecret), decode,decodeAndVerifySignature) 
 {----------------------------------------}
 import qualified Data.ByteString.Char8    as BS 
+import qualified Data.ByteString.Lazy.Char8 as B (unpack,pack)
 import           Data.ByteString.Lazy     (toStrict, fromStrict, ByteString)
 import           Data.ByteString.Lazy.UTF8
 import           Data.Map.Strict          (toList, Map, keys, lookup) 
-import           Data.Text                as DT 
+import           Data.Text as DT          ( Text, pack, unpack ) 
 import           Network.URI.Encode       (decodeBSToText,encodeTextToBS)      
 {----------------------------------------}
 import           Network.HTTP.Types       (Status, badRequest400, hContentType,
@@ -64,14 +65,14 @@ helphead (x:xs) = [x]
 application2 :: ByteString -> Application
 application2 role req respond = 
   case pathInfo req of
-    (_:"news":_)             -> routeNews      role req respond   
-    (_:"autors":_)           -> routeAutors    role req respond
-    (_:"drafts":_)           -> routeDrafts    role req respond
-    --(_:"comments":_) -> routeComments role req respond
-    --(_:"users":_)    -> routeUsers    role req respond
+    (_:"news":id1:"comments":_) -> routeComments id1  role req respond
+    (_:"news":_)                -> routeNews          role req respond   
+    (_:"autors":_)              -> routeAutors        role req respond
+    (_:"drafts":_)              -> routeDrafts        role req respond
+    (_:"users":_)               -> routeUsers         role req respond
     --(_:"tags":_)     -> routeTags     role req respond
     --(_:"category":_) -> routeCategory role req respond
-    _              -> respond $ responseNotFoundJSON $ encode (Status {ok=False,result=Nothing,error_description=Just "error: no Path",error_id=Just 404} :: Types.Status News)
+    _                           -> respond $ responseNotFoundJSON $ encode (Status {ok=False,result=Nothing,error_description=Just "error: no Path",error_id=Just 404} :: Types.Status News)
 
 routeNews :: ByteString -> Application
 routeNews role req respond = 
@@ -79,9 +80,9 @@ routeNews role req respond =
     [_,"news"] -> dbQuery someNewsDecoder someNewsEncoder "SELECT * FROM news" req respond
     [_,"news","filter"] ->
         case queryString req of 
-        ("date_of_create_at_gt",Just x):xs -> dbQuery someNewsDecoder someNewsEncoder (BS.pack $ "SELECT * FROM news WHERE date_of_create > '" ++ show x ++ "';") req respond
-        ("date_of_create_at_lt",Just x):xs -> dbQuery someNewsDecoder someNewsEncoder (BS.pack $ "SELECT * FROM news WHERE date_of_create < '" ++ show x ++ "';") req respond
-        ("name_of_autor", Just x):xs       -> dbQuery someNewsDecoder someNewsEncoder (BS.pack $ "SELECT n.*, u.second_name, u.first_name FROM news n, users u WHERE n.autor_id = u.user_id  AND u.first_name = '" ++ show x ++ "';") req respond
+        ("date_of_create_at_gt",Just x):xs -> dbQuery someNewsDecoder someNewsEncoder (BS.pack $ "SELECT * FROM news WHERE date_of_create > '" ++ BS.unpack x ++ "';") req respond
+        ("date_of_create_at_lt",Just x):xs -> dbQuery someNewsDecoder someNewsEncoder (BS.pack $ "SELECT * FROM news WHERE date_of_create < '" ++ BS.unpack x ++ "';") req respond
+        ("name_of_autor", Just x):xs       -> dbQuery someNewsDecoder someNewsEncoder (BS.pack $ "SELECT n.*, u.second_name, u.first_name FROM news n, users u WHERE n.autor_id = u.user_id  AND u.first_name = '" ++ BS.unpack x ++ "';") req respond
         ("category", Just x):xs            -> dbQuery someNewsDecoder someNewsEncoder (BS.pack $ "SELECT * FROM news WHERE category = '" ++ BS.unpack x ++ "';") req respond
 {-
 --*!      category_id
@@ -92,7 +93,7 @@ routeNews role req respond =
     {----------------------------------------------------------------}
     [_,"news","order"] ->
         case queryString req of
-        ("date_of_create",Just x):xs  -> dbQuery someNewsDecoder someNewsEncoder (BS.pack $ "SELECT * FROM news ORDER BY date_of_create " ++ show x ++ "';") req respond
+        ("date_of_create",Just x):xs  -> dbQuery someNewsDecoder someNewsEncoder (BS.pack $ "SELECT * FROM news ORDER BY date_of_create " ++ BS.unpack x ++ ";") req respond
         ("category",Just x):xs        -> dbQuery someNewsDecoder someNewsEncoder (BS.pack $ "SELECT * FROM news ORDER BY category " ++ BS.unpack x ++ ";") req respond
         ("name_of_autor", Just x):xs  -> dbQuery someNewsDecoder someNewsEncoder (BS.pack $ "SELECT n.*, u.second_name, u.first_name FROM news n, users u WHERE n.autor_id = u.user_id  ORDER BY u.first_name " ++ BS.unpack x ++ ";") req respond
 {-
@@ -106,8 +107,9 @@ routeNews role req respond =
     _ -> respond $ responseNotFoundJSON $ encode ("error: path or query news" ::Text)
 
 routeAutors ::  ByteString -> Application
-routeAutors role req respond  
-  | role == "\"Admin\"" =
+routeAutors role req respond  =
+  case role of
+    "\"Admin\"" ->
        case requestMethod req of
          "GET"  ->  case pathInfo req of  
                      [_,"autors"] -> dbQuery someAutorsDecoder someAutorsEncoder "SELECT * FROM autors;" req respond
@@ -127,8 +129,9 @@ routeAutors role req respond
 {- -- *!    "PUT"  -}
          _ ->  respond $ responseNotFoundJSON $ encode (Status {ok=False,result=Nothing,error_description=Just "Problem with rqstMethod (autors)",error_id=Just 404} :: Types.Status News) 
   {------------------------------------------------------------}
-  | otherwise = respond $ responseNotFoundJSON role
+    _ -> respond $ responseNotFoundJSON $ B.pack $ "role is " ++ (B.unpack role)
 
+{- -- *!    "добавить проверку на условие черновиков конкретного автора"  -}
 routeDrafts :: ByteString -> Application
 routeDrafts role req respond = 
         case role of
@@ -158,8 +161,31 @@ routeDrafts role req respond =
           {------------------------------------------}
            _ -> respond $ responseNotFoundJSON $ role 
 
+routeComments :: Text -> ByteString -> Application
+routeComments idNew role req respond 
+      | requestMethod req == "GET"    = dbQuery someCommentsDecoder someCommentsEncoder (selectSqlComment $ DT.unpack idNew) req respond
+      {----------------------------------------------------------------------------}
+      | requestMethod req == "DELETE" = 
+                      case join (Prelude.lookup "id_of_comment" (queryString req)) of 
+                      (Just idComment) -> 
+                                     case role of
+                                     "\"Admin\"" -> dbQueryInsert () (deleteSqlComment1 $ BS.unpack idComment) HE.noParams req respond  
+                                     "\"Autor\"" -> dbQuery someCommentsDecoder someCommentsEncoder (deleteSqlComment2 ( BS.unpack idComment) $ getId req) req respond  
+                                     _ -> respond $ responseNotFoundJSON $ encode (Status {ok=False,result=Nothing,error_description=Just "Problem with role (comments)",error_id=Just 404} :: Types.Status Comments) 
+                      _ -> respond $ responseNotFoundJSON $ encode (Status {ok=False,result=Nothing,error_description=Just "Problem with no query (comments)",error_id=Just 404} :: Types.Status Comments) 
+      {----------------------------------------------------------------------------}
+      | requestMethod req == "POST"    = 
+                      case join (Prelude.lookup "text_of_comment" (queryString req)) of 
+                      (Just comment) -> dbQueryInsert (Comments {id_of_comment=0,user_id_comment=read $ getId req,id_of_new_comment=read $ DT.unpack idNew,text_of_comment=DT.pack $ BS.unpack comment}) (insertSqlComment) someCommentsEncoder  req respond  
+                      _ -> respond $ responseNotFoundJSON $ encode (Status {ok=False,result=Nothing,error_description=Just "Problem with no query (comments)",error_id=Just 404} :: Types.Status Comments)    
+      {----------------------------------------------------------------------------}
+      | otherwise = respond $ responseNotFoundJSON $ encode (Status {ok=False,result=Nothing,error_description=Just "Problem with reqMethod (comments)",error_id=Just 404} :: Types.Status Comments) 
+ 
+routeUsers :: ByteString -> Application
+routeUsers = undefined
 
-{-help function for routeDrafts-}
+
+{-help function for route-}
 selectsqlDraft req = BS.pack $ "SELECT * FROM drafts WHERE user_id=" ++ (getId req) ++";"
 getId req = fromMaybe (fmap (Prelude.lookup "user_id") $ jwtCheck (route req))
 fromMaybe :: ToJSON a => Maybe (Maybe a) -> String
@@ -169,15 +195,18 @@ fromMaybe Nothing        = ""
 
 lookupStuff [] lst = []
 lookupStuff (stuff:s) lst = (Prelude.lookup stuff $ queryString lst) : (lookupStuff s lst)
-insertsqlAutor,insertsqlDraft,updateqlDraft,insertsqlNews  :: BS.ByteString
+insertsqlAutor,insertsqlDraft,updateqlDraft,insertsqlNews,insertSqlComment  :: BS.ByteString
 insertsqlAutor     = BS.pack "INSERT INTO autors(user_id, description,news_id) VALUES ($1,$2,$3);"
 insertsqlDraft     = BS.pack "INSERT INTO drafts(id_of_draft,user_id,text_of_draft) VALUES ($1,$2,$3);"
 insertsqlNews      = BS.pack "UPDATE news n SET text_of_new = d.text_of_draft FROM drafts d WHERE n.id_of_new=2 and d.id_of_draft=4 ; "
 updateqlDraft      = BS.pack "UPDATE drafts SET text_of_draft = $3 WHERE id_of_draft=$1;"
+insertSqlComment   = BS.pack "INSERT INTO comments(id_of_comment,id_of_user,id_of_new,text_of_comment) VALUES (DEFAULT,$2,$3,$4)"
+
 deleteSqlDraft :: Request -> BS.ByteString
 deleteSqlDraft req = BS.pack $ "DELETE FROM drafts WHERE id_of_draft = " ++ (getId req) ++ ";"
-
-
+deleteSqlComment1 idOfComment = BS.pack $ "DELETE FROM comments WHERE id_of_comment = " ++ idOfComment
+deleteSqlComment2 idOfNew idOfComment = BS.pack $ "DELETE FROM comments WHERE id_of_comment = " ++ idOfComment ++ " AND id_of_new = " ++ idOfNew ++ ";"
+selectSqlComment id1 = BS.pack $ "SELECT * FROM comments WHERE id_of_new =" ++ id1 ++ " ;" 
 --routeUsers :: ByteString ->  Application
 --routeComments ::  ByteString ->  Application
 
