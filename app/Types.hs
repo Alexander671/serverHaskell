@@ -22,11 +22,11 @@ instance ToJSON a => ToJSON (Status a) where
 
 data News = News 
   { name :: Text,
-    category :: Maybe Text,
-    tags :: Maybe [Text],
+    category :: Category,
+    tags :: Tags,
     text_of_new :: Maybe Text,
     id_of_new :: Integer,
-    autor_id :: Integer,
+    autor_id :: Autors,
     date_of_create_new :: Maybe Day
     
   } deriving (Show, Generic)
@@ -46,7 +46,6 @@ instance ToJSON Autors where
 data Users = Users
   { image               :: Maybe Text,
     date_of_create_user :: Day, 
-    admin               :: Bool,
     user_id             :: Integer,
     first_name          :: Text,
     second_name         :: Text
@@ -72,3 +71,23 @@ data Draft = Draft
   } deriving (Show, Generic)
 instance FromJSON Draft where                            
 instance ToJSON Draft where
+
+
+data Category = Category
+  { parent_id      :: Maybe Integer,
+    category_name  :: Text,
+    category_id    :: Integer
+  } deriving (Show, Generic)
+
+
+instance FromJSON Category where                            
+instance ToJSON Category where
+
+data Tags = Tags
+  { tag_name  :: Text,
+    tag_id    :: Integer
+  } deriving (Show, Generic)
+
+
+instance FromJSON Tags where                            
+instance ToJSON Tags where

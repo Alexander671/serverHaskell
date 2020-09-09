@@ -5,7 +5,7 @@ module Main where
 import DB
 import Types
 --import JWT
-import qualified Hasql.Decoders as HD (rowVector, rowList, noResult, Result,Row)
+import qualified Hasql.Decoders as HD (column, nullable, rowVector, rowList, noResult, Result,Row)
 import qualified Hasql.Encoders as HE (noParams, Params)
 {----------------------------------------}
 import Web.JWT as JWT (ClaimsMap, unregisteredClaims, 
@@ -77,7 +77,7 @@ application2 role req respond =
 routeNews :: ByteString -> Application
 routeNews role req respond = 
     case pathInfo req of
-    [_,"news"] -> dbQuery someNewsDecoder someNewsEncoder "SELECT * FROM news" req respond
+    [_,"news"] -> dbQuery someNewsDecoder someNewsEncoder "SELECT n.name, c, t, n.text_of_new, id_of_new, a ,date_of_create  FROM news n, tags t, categories c, autors a WHERE n.category_id = c.category_id AND a.autor_id=n.autor_id AND t.tag_id = ALL (n.tags)" req respond
     [_,"news","filter"] ->
         case queryString req of 
         ("date_of_create_at_gt",Just x):xs -> dbQuery someNewsDecoder someNewsEncoder (BS.pack $ "SELECT * FROM news WHERE date_of_create > '" ++ BS.unpack x ++ "';") req respond
@@ -112,7 +112,7 @@ routeAutors role req respond  =
     "\"Admin\"" ->
        case requestMethod req of
          "GET"  ->  case pathInfo req of  
-                     [_,"autors"] -> dbQuery someAutorsDecoder someAutorsEncoder "SELECT * FROM autors;" req respond
+                     [_,"autors"] -> dbQuery (HD.rowVector $ HD.column $ HD.nullable someAutorsDecoder) someAutorsEncoder "SELECT * FROM autors;" req respond
                      _            -> respond $ responseNotFoundJSON $ encode (Status {ok=False,result=Nothing,error_description=Just "Problem with queryString (autors) GET",error_id=Just 404} :: Types.Status News) 
          {----------------------------------------------------------------}
          "POST" -> case fmap join (lookupStuff ["user_id_autors","description","news_id"] req) of 
@@ -182,7 +182,21 @@ routeComments idNew role req respond
       | otherwise = respond $ responseNotFoundJSON $ encode (Status {ok=False,result=Nothing,error_description=Just "Problem with reqMethod (comments)",error_id=Just 404} :: Types.Status Comments) 
  
 routeUsers :: ByteString -> Application
-routeUsers = undefined
+routeUsers role req respond 
+      | requestMethod req == "GET"  = dbQuery someUsersDecoder someUsersEncoder (selectSqlUser) req respond
+      | requestMethod req == "POST" = case fmap join (lookupStuff ["first_name","second_name","image"] req) of 
+                                      [Just first,Just second,image] -> dbQueryInsert (Users {image=fmap (DT.pack . BS.unpack) image,date_of_create_user=fromGregorian 0 0 0,user_id=0,first_name=DT.pack $ BS.unpack first,second_name=DT.pack $ BS.unpack second}) insertsqlUsers someUsersEncoder req respond 
+                                      _ -> respond $ responseNotFoundJSON $ encode (Status {ok=False,result=Nothing,error_description=Just $ "Problem with no query (users) POST",error_id=Just 404} :: Types.Status Comments)
+      | requestMethod req == "DELETE"   &&
+        role              == "\"Admin\"" = case join $ Prelude.lookup "user_id" (queryString req) of 
+                                      (Just user) -> dbQueryInsert () (deleteSqlUser user) HE.noParams req respond 
+                                      _ -> respond $ responseNotFoundJSON $ encode (Status {ok=False,result=Nothing,error_description=Just $ "Problem with no query (users) DELETE",error_id=Just 404} :: Types.Status Comments)
+      | otherwise = respond $ responseNotFoundJSON $ encode (Status {ok=False,result=Nothing,error_description=Just "Problem with reqMethod (users)",error_id=Just 404} :: Types.Status Comments) 
+ 
+
+
+routeTags :: ByteString -> Application
+routeTags role req respond = undefined
 
 
 {-help function for route-}
@@ -193,14 +207,18 @@ fromMaybe (Just(Just x)) = toString $ DA.encode x
 fromMaybe (Just Nothing) = ""
 fromMaybe Nothing        = ""
 
+lookupStuff :: [BS.ByteString] -> Request -> [Maybe (Maybe BS.ByteString)]
 lookupStuff [] lst = []
 lookupStuff (stuff:s) lst = (Prelude.lookup stuff $ queryString lst) : (lookupStuff s lst)
-insertsqlAutor,insertsqlDraft,updateqlDraft,insertsqlNews,insertSqlComment  :: BS.ByteString
+insertsqlAutor,insertsqlDraft,updateqlDraft,insertsqlNews,insertSqlComment,selectSqlUser,insertsqlUsers  :: BS.ByteString
 insertsqlAutor     = BS.pack "INSERT INTO autors(user_id, description,news_id) VALUES ($1,$2,$3);"
 insertsqlDraft     = BS.pack "INSERT INTO drafts(id_of_draft,user_id,text_of_draft) VALUES ($1,$2,$3);"
 insertsqlNews      = BS.pack "UPDATE news n SET text_of_new = d.text_of_draft FROM drafts d WHERE n.id_of_new=2 and d.id_of_draft=4 ; "
 updateqlDraft      = BS.pack "UPDATE drafts SET text_of_draft = $3 WHERE id_of_draft=$1;"
 insertSqlComment   = BS.pack "INSERT INTO comments(id_of_comment,id_of_user,id_of_new,text_of_comment) VALUES (DEFAULT,$2,$3,$4)"
+selectSqlUser      = BS.pack "SELECT * FROM users;"
+insertsqlUsers     = BS.pack "INSERT INTO users(image,date_of_create,user_id,first_name,second_name) VALUES ($1,DEFAULT,DEFAULT,$4,$5)"
+deleteSqlUser user = BS.pack $ "DELETE FROM users WHERE user_id = " ++ BS.unpack user ++ ";"
 
 deleteSqlDraft :: Request -> BS.ByteString
 deleteSqlDraft req = BS.pack $ "DELETE FROM drafts WHERE id_of_draft = " ++ (getId req) ++ ";"
