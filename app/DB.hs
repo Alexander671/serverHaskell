@@ -24,6 +24,7 @@ import Data.Functor.Contravariant
     ( Contravariant(contramap), (>$<) ) 
 import Data.Aeson (ToJSON, encode)
 import Data.Aeson (decode)
+import Contravariant.Extras
 
 {------------------------------------}
 
@@ -78,9 +79,9 @@ someNewsEncoder =
           (tags >$< someTagsEncoder) <>
           (text_of_new >$< HE.param (HE.nullable HE.text)) <>
           (fromIntegral . id_of_new >$< HE.param (HE.nonNullable HE.int8)) <> 
-          (autor_id >$< (someAutorsEncoder)) <>
+          (autor_id >$< someAutorsEncoder) <>
           (date_of_create_new >$< HE.param (HE.nullable HE.date))          
-
+         
 {-Decoder-}
 someNewsDecoder :: HD.Result (Vector News)
 someNewsDecoder =  HD.rowVector $ Types.News <$> 
@@ -90,40 +91,88 @@ someNewsDecoder =  HD.rowVector $ Types.News <$>
           (HD.column $ HD.nullable HD.text) <*>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
           (HD.column $ HD.nonNullable someAutorsDecoder) <*>
-          (HD.column $ HD.nullable HD.date)
+          (HD.column $ HD.nullable HD.date) <*>
+          (HD.column $ HD.nonNullable someCommentsDecoder)
+
+{-Encoder for type Autors-}
+someAutorsEncoderNotNested :: HE.Params AutorsEncoder
+someAutorsEncoderNotNested =  
+          (fromIntegral . user_id_autors_en >$< HE.param (HE.nonNullable HE.int8)) <>
+          (description_en >$< HE.param (HE.nullable HE.text)) <>
+          (news_id_en >$< HE.param (HE.nullable $ HE.array $ HE.dimension DF.foldl' $ HE.element $ HE.nonNullable $ contramap fromIntegral HE.int8))
+
+{-DecoderNotNested-}
+someAutorsDecoderNotNested :: HD.Result (Vector Autors)
+someAutorsDecoderNotNested = HD.rowVector $ Types.Autors <$>
+          (HD.column (HD.nullable HD.text)) <*>
+          (HD.column $ HD.nullable $ HD.array $ HD.dimension Control.Monad.replicateM (HD.element (HD.nonNullable (fromIntegral <$> HD.int8)))) <*>
+          (HD.column (HD.nonNullable someUsersDecoder))
 
 {-Encoder for type Autors-}
 someAutorsEncoder :: HE.Params Autors
 someAutorsEncoder =  
-          (fromIntegral . user_id_autors >$< HE.param (HE.nonNullable HE.int8)) <>
           (description >$< HE.param (HE.nullable HE.text)) <>
-          (news_id >$< HE.param (HE.nullable $ HE.array $ HE.dimension DF.foldl' $ HE.element $ HE.nonNullable $ contramap fromIntegral HE.int8))
+          (news_id >$< HE.param (HE.nullable $ HE.array $ HE.dimension DF.foldl' $ HE.element $ HE.nonNullable $ contramap fromIntegral HE.int8)) <>
+          (user_id_autors >$< someUsersEncoder)
 
 {-Decoder-}
-
-someAutorsDecoder :: HD.Value Autors
+someAutorsDecoder :: HD.Value  Autors
 someAutorsDecoder = HD.composite $ Types.Autors <$>
-          (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*>
           (HD.field (HD.nullable HD.text)) <*>
-          (HD.field $ HD.nullable $ HD.array $ HD.dimension Control.Monad.replicateM (HD.element (HD.nonNullable (fromIntegral <$> HD.int8)))) 
+          (HD.field $ HD.nullable $ HD.array $ HD.dimension Control.Monad.replicateM (HD.element (HD.nonNullable (fromIntegral <$> HD.int8)))) <*>
+          (HD.field (HD.nonNullable someUsersDecoder))
+
+{-Encoder for type Category-}
+someTagsEncoder :: HE.Params (Vector Tags)
+someTagsEncoder = 
+        (HE.param $ HE.nonNullable $ fmap tag_name >$< HE.foldableArray (HE.nonNullable HE.text)) <>
+        (HE.param $ HE.nonNullable $ (fmap tag_id) >$< HE.foldableArray (HE.nonNullable $ contramap fromIntegral HE.int8)) 
           
+          
+{-Decoder-}
+someTagsDecoder :: HD.Value (Vector Tags)
+someTagsDecoder = HD.vectorArray $ HD.nonNullable $ HD.composite $ Types.Tags <$>
+          (HD.field (HD.nonNullable HD.text)) <*>
+          (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) 
+
+{-Decoder for NotNested-}
+someTagsDecoderNotNested :: HD.Result (Vector Tags)
+someTagsDecoderNotNested = HD.rowVector $ Types.Tags <$>
+          (HD.column (HD.nonNullable HD.text)) <*>
+          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) 
+
+{-Decoder for NotNested-}
+someTagsEncoderNotNested :: HE.Params (Tags)
+someTagsEncoderNotNested = 
+        (tag_name >$< HE.param (HE.nonNullable HE.text)) <>
+        (tag_id >$< HE.param (HE.nonNullable $ contramap fromIntegral HE.int8)) 
+
 {-Encoder for type Users-}
-someUsersEncoder :: HE.Params Users
+someUsersEncoder :: HE.Params (Users)
 someUsersEncoder = 
           (image >$< HE.param (HE.nullable $ contramap encodeTextToBS HE.bytea)) <>
           (date_of_create_user >$< HE.param (HE.nonNullable HE.date)) <>
-          (fromIntegral . user_id >$< HE.param (HE.nonNullable HE.int8)) <>
+          (user_id >$< HE.param (HE.nonNullable $ contramap fromIntegral HE.int8)) <>
           (first_name >$< HE.param (HE.nonNullable HE.text)) <>
           (second_name >$< HE.param (HE.nonNullable HE.text)) 
 
 {-Decoder-}
-someUsersDecoder :: HD.Result (Vector Users)
-someUsersDecoder = HD.rowVector $ Types.Users <$>
-          (HD.column (HD.nullable $ decodeBSToText <$> HD.bytea)) <*>
+someUsersDecoder :: HD.Value (Users)
+someUsersDecoder =  HD.composite $ Types.Users <$>
+          (HD.field (HD.nonNullable HD.date)) <*>
+          (HD.field (HD.nonNullable HD.text)) <*>
+          (HD.field (HD.nonNullable HD.text)) <*>
+          (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*>
+          (HD.field (HD.nullable $ decodeBSToText <$> HD.bytea))
+
+{-Decoder for NotNested-}
+someUsersDecoderNotNested :: HD.Result (Vector Users)
+someUsersDecoderNotNested =  HD.rowVector $ Types.Users <$>
           (HD.column (HD.nonNullable HD.date)) <*>
-          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
           (HD.column (HD.nonNullable HD.text)) <*>
-          (HD.column (HD.nonNullable HD.text))
+          (HD.column(HD.nonNullable HD.text)) <*>
+          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
+          (HD.column (HD.nullable $ decodeBSToText <$> HD.bytea)) 
           
 {-Encoder for type Comment-}
 someCommentsEncoder :: HE.Params Comments                      
@@ -133,10 +182,18 @@ someCommentsEncoder =
           (fromIntegral . id_of_new_comment >$< HE.param (HE.nonNullable HE.int8)) <>
           (text_of_comment >$< HE.param (HE.nonNullable HE.text)) 
           
-
 {-Decoder-}
-someCommentsDecoder :: HD.Result (Vector Comments)
-someCommentsDecoder = HD.rowVector $ Types.Comments <$>
+someCommentsDecoder :: HD.Value (Vector Comments)
+someCommentsDecoder = HD.vectorArray $ HD.nonNullable $ HD.composite $ Types.Comments <$>
+          (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*>
+          (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*> 
+          (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*>
+          (HD.field (HD.nonNullable HD.text)) 
+
+
+{-Decoder NotNested-}
+someCommentsDecoderNotNested :: HD.Result (Vector Comments)
+someCommentsDecoderNotNested = HD.rowVector $ Types.Comments <$>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*> 
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
@@ -149,14 +206,13 @@ someDraftsEncoder =
           (fromIntegral . id_of_user  >$< HE.param (HE.nonNullable HE.int8)) <>
           (text_of_draft >$< HE.param (HE.nonNullable HE.text))
           
-
-
 {-Decoder-}
 someDraftsDecoder :: HD.Result (Vector Draft)
 someDraftsDecoder = HD.rowVector $ Types.Draft <$>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
-          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
-          (HD.column (HD.nonNullable HD.text)) 
+          (HD.column (HD.nonNullable HD.text)) <*>
+          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) 
+          
 
 {-Encoder for type Category-}
 someCategoriesEncoder :: HE.Params Category                      
@@ -172,18 +228,12 @@ someCategoriesDecoder = HD.composite $ Types.Category <$>
           (HD.field (HD.nonNullable HD.text)) <*>
           (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) 
 
-{-Encoder for type Category-}
-someTagsEncoder :: HE.Params Tags                      
-someTagsEncoder = 
-          (fromIntegral <$> tag_id >$< HE.param (HE.nonNullable HE.int8)) <>
-          (tag_name  >$< HE.param (HE.nonNullable HE.text))
-
-{-Decoder-}
-someTagsDecoder :: HD.Value Tags
-someTagsDecoder = HD.composite $ Types.Tags <$>
-          (HD.field (HD.nonNullable HD.text)) <*>
-          (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) 
-          
+{-Decoder NotNested-}
+someCategoriesDecoderNotNested :: HD.Result (Vector Category)
+someCategoriesDecoderNotNested = HD.rowVector $ Types.Category <$>
+          (fmap fromIntegral <$> (HD.column (HD.nullable HD.int8))) <*>
+          (HD.column (HD.nonNullable HD.text)) <*>
+          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) 
 
 
 

@@ -23,11 +23,12 @@ instance ToJSON a => ToJSON (Status a) where
 data News = News 
   { name :: Text,
     category :: Category,
-    tags :: Tags,
+    tags :: Vector Tags,
     text_of_new :: Maybe Text,
     id_of_new :: Integer,
     autor_id :: Autors,
-    date_of_create_new :: Maybe Day
+    date_of_create_new :: Maybe Day,
+    comments :: Vector Comments
     
   } deriving (Show, Generic)
 
@@ -35,20 +36,20 @@ instance FromJSON News where
 instance ToJSON News where
 
 data Autors = Autors
-   { user_id_autors :: Integer,
-     description :: Maybe Text,
-     news_id :: Maybe [Integer]
+   { description :: Maybe Text,
+     news_id :: Maybe [Integer],
+     user_id_autors :: Users   
    } deriving (Show, Generic)
 
 instance FromJSON Autors where
 instance ToJSON Autors where
 
 data Users = Users
-  { image               :: Maybe Text,
-    date_of_create_user :: Day, 
-    user_id             :: Integer,
+  { date_of_create_user :: Day, 
     first_name          :: Text,
-    second_name         :: Text
+    second_name         :: Text,
+    user_id             :: Integer,
+     image               :: Maybe Text
   } deriving (Show, Generic)
 
 instance FromJSON Users where                            
@@ -66,8 +67,8 @@ instance ToJSON Comments where
 
 data Draft = Draft
   { id_of_draft   :: Integer,
-    id_of_user    :: Integer,
-    text_of_draft :: Text
+    text_of_draft :: Text,
+    id_of_user    :: Integer
   } deriving (Show, Generic)
 instance FromJSON Draft where                            
 instance ToJSON Draft where
@@ -91,3 +92,42 @@ data Tags = Tags
 
 instance FromJSON Tags where                            
 instance ToJSON Tags where
+
+
+data NewsEncoder = NewsEncoder 
+  { name_en :: Text,
+    category_en :: Integer,
+    tags_en :: Vector Tags,
+    text_of_new_en :: Maybe Text,
+    id_of_new_en :: Integer,
+    autor_id_en :: Integer,
+    date_of_create_new_en :: Maybe Day
+    
+  } deriving (Show, Generic)
+
+instance FromJSON NewsEncoder where
+instance ToJSON NewsEncoder where
+
+data AutorsEncoder = AutorsEncoder
+   { description_en :: Maybe Text,
+     news_id_en :: Maybe [Integer],
+     user_id_autors_en :: Integer   
+   } deriving (Show, Generic)
+
+instance FromJSON AutorsEncoder where
+instance ToJSON AutorsEncoder where
+
+data UsersEncoder = UsersEncoder
+  { image_en               :: Maybe Text,
+    date_of_create_user_en :: Day, 
+    first_name_en          :: Text,
+    second_name_en         :: Text,
+    user_id_en             :: Integer
+  } deriving (Show, Generic)
+
+instance FromJSON UsersEncoder where                            
+instance ToJSON UsersEncoder where
+
+
+
+

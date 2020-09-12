@@ -36,7 +36,8 @@ dependencies:
 - jwt
 - vector
 - hasql-th
-
+- contravariant-extras
+- transformers
 library:
   source-dirs: src
 
