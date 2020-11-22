@@ -1,7 +1,10 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedStrings, DeriveGeneric #-}
+{-# LANGUAGE DeriveGeneric #-}
 module DB where
 import Types
+import Logging.Logging as L ( runLog )
+import Logging.Level (LogLevel(DEBUG, INFO) )
 {------------------------------------}
 import qualified Hasql.Connection as HC 
 import qualified Hasql.Session as HS
@@ -10,35 +13,30 @@ import qualified Hasql.Encoders as HE
 import qualified Hasql.Statement as HST
 {------------------------------------}
 import Data.Vector ( Vector )
-import Data.Text 
 import Network.URI.Encode (decodeBSToText,encodeTextToBS)
 {------------------------------------}
 import qualified Data.ByteString.Char8    as BS
-import           Data.ByteString.Lazy     (ByteString)
-import qualified Data.ByteString.Lazy     as LBS
 {------------------------------------}
 import qualified Control.Monad
-import Data.Foldable as DF ( Foldable(foldl') )
 {------------------------------------}
 import Data.Functor.Contravariant
     ( Contravariant(contramap), (>$<) ) 
 import Data.Aeson (ToJSON, encode)
-import Data.Aeson (decode)
-import Contravariant.Extras
+import qualified Data.Vector as DV
 
 {------------------------------------}
 
-connectToDB :: ToJSON a => BS.ByteString -> HD.Result (Vector a) -> IO (Status a)
-connectToDB query dec  =
+connectToDB :: Data.Aeson.ToJSON a => Int -> BS.ByteString -> HD.Result (Vector a) -> IO (Status a)
+connectToDB pagin query dec  =
   let
     connectionSettings :: HC.Settings
     connectionSettings =
       HC.settings
         "localhost"
-        (fromInteger 5432)
+        5432
         "postgres"
         "password"
-        ""
+        "postgres23"
   in do
     connectionResult <- HC.acquire connectionSettings
     case connectionResult of
@@ -50,10 +48,10 @@ connectToDB query dec  =
         HC.release connection
         case queryResult of
           Right result1 -> do
-                        putStrLn $ show $ encode $ Status {ok=True,result=Just result1,error_description=Nothing,error_id=Nothing}
+                        runLog INFO $ show $ encode $ Status {ok=True,result=Just $ DV.drop (10*(pagin-1)) $ DV.take (10*pagin) result1,error_description=Nothing,error_id=Nothing}
                         return $ Status {ok=True,result=Just $ result1,error_description=Nothing,error_id=Nothing} -- понять какой тип использовать для ошибки
           Left err -> do
-                     putStrLn $ show $ encode (Status {ok=False,result=Nothing,error_description=Just $ show err,error_id=Just 404} :: Types.Status News)
+                     runLog DEBUG $ show $ err
                      return $ Status {ok=False,result=Nothing,error_description=Just "problem with syntax",error_id=Just 404}
 
 
@@ -70,57 +68,65 @@ selectTasksStatement sql dec =
              True
 
 
-
 {-Encoder for type News-}
-someNewsEncoder :: HE.Params News
+someNewsEncoder :: HE.Params NewsEncoder
 someNewsEncoder = 
-          (name >$< HE.param (HE.nonNullable HE.text)) <>
-          (category >$< (someCategoriesEncoder)) <>
-          (tags >$< someTagsEncoder) <>
-          (text_of_new >$< HE.param (HE.nullable HE.text)) <>
-          (fromIntegral . id_of_new >$< HE.param (HE.nonNullable HE.int8)) <> 
-          (autor_id >$< someAutorsEncoder) <>
-          (date_of_create_new >$< HE.param (HE.nullable HE.date))          
+          (name_en >$< HE.param (HE.nonNullable HE.text)) <>
+          (fromIntegral . category_en >$< HE.param (HE.nonNullable HE.int8)) <> 
+          (tags_en >$< someTagsEncoder) <>
+          (text_of_new_en >$< HE.param (HE.nullable HE.text)) <>
+          (fromIntegral . id_of_new_en >$< HE.param (HE.nonNullable HE.int8)) <> 
+          (fromIntegral . autor_id_en >$< HE.param (HE.nonNullable HE.int8)) <> 
+          (date_of_create_new_en >$< HE.param (HE.nullable HE.date))          
          
 {-Decoder-}
 someNewsDecoder :: HD.Result (Vector News)
 someNewsDecoder =  HD.rowVector $ Types.News <$> 
-          (HD.column $ HD.nonNullable HD.text) <*>
-          (HD.column $ HD.nonNullable someCategoriesDecoder) <*>
-          (HD.column $ HD.nonNullable someTagsDecoder) <*>
           (HD.column $ HD.nullable HD.text) <*>
-          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
-          (HD.column $ HD.nonNullable someAutorsDecoder) <*>
+          (HD.column $ HD.nullable someCategoriesDecoder) <*>
+          (HD.column $ HD.nullable someTagsDecoder) <*>
+          (HD.column $ HD.nullable HD.text) <*>
+          (HD.column (HD.nonNullable $ fromIntegral <$> HD.int8)) <*>
+          (HD.column $ HD.nullable someAutorsDecoder) <*>
+          (HD.column $ HD.nullable someImageDecoder) <*>
           (HD.column $ HD.nullable HD.date) <*>
-          (HD.column $ HD.nonNullable someCommentsDecoder)
+          (HD.column $ HD.nullable someCommentsDecoder) <*>
+          (HD.column $ HD.nullable HD.text)
+
+{-Decoder-}
+someNewsDecoderNotNested :: HD.Result (Vector NewsNotNested)
+someNewsDecoderNotNested =  HD.rowVector $ Types.NewsNotNested <$> 
+          (HD.column $ HD.nullable HD.text) <*>
+          (HD.column $ HD.nullable HD.text) <*>
+          (HD.column (HD.nullable $ fromIntegral <$> HD.int8)) <*>
+          (HD.column (HD.nullable $ fromIntegral <$> HD.int8)) <*>
+          (HD.column $ HD.nullable HD.date) <*>
+          (HD.column (HD.nullable $ fromIntegral <$> HD.int8)) <*>
+          (HD.column $ HD.nullable (HD.vectorArray (HD.nonNullable (fromIntegral <$> HD.int8)))) <*>
+          (HD.column $ HD.nullable HD.text)
+          
 
 {-Encoder for type Autors-}
-someAutorsEncoderNotNested :: HE.Params AutorsEncoder
-someAutorsEncoderNotNested =  
-          (fromIntegral . user_id_autors_en >$< HE.param (HE.nonNullable HE.int8)) <>
-          (description_en >$< HE.param (HE.nullable HE.text)) <>
-          (news_id_en >$< HE.param (HE.nullable $ HE.array $ HE.dimension DF.foldl' $ HE.element $ HE.nonNullable $ contramap fromIntegral HE.int8))
-
-{-DecoderNotNested-}
-someAutorsDecoderNotNested :: HD.Result (Vector Autors)
-someAutorsDecoderNotNested = HD.rowVector $ Types.Autors <$>
-          (HD.column (HD.nullable HD.text)) <*>
-          (HD.column $ HD.nullable $ HD.array $ HD.dimension Control.Monad.replicateM (HD.element (HD.nonNullable (fromIntegral <$> HD.int8)))) <*>
-          (HD.column (HD.nonNullable someUsersDecoder))
-
-{-Encoder for type Autors-}
-someAutorsEncoder :: HE.Params Autors
+someAutorsEncoder :: HE.Params AutorsEncoder
 someAutorsEncoder =  
-          (description >$< HE.param (HE.nullable HE.text)) <>
-          (news_id >$< HE.param (HE.nullable $ HE.array $ HE.dimension DF.foldl' $ HE.element $ HE.nonNullable $ contramap fromIntegral HE.int8)) <>
-          (user_id_autors >$< someUsersEncoder)
+          (description_en >$< HE.param (HE.nullable HE.text)) <>
+          (user_id_autors_en >$< HE.param (HE.nonNullable $ contramap fromIntegral HE.int8)) 
 
 {-Decoder-}
 someAutorsDecoder :: HD.Value  Autors
 someAutorsDecoder = HD.composite $ Types.Autors <$>
           (HD.field (HD.nullable HD.text)) <*>
-          (HD.field $ HD.nullable $ HD.array $ HD.dimension Control.Monad.replicateM (HD.element (HD.nonNullable (fromIntegral <$> HD.int8)))) <*>
+          (HD.field $ HD.nullable $ HD.array $ HD.dimension Control.Monad.replicateM (HD.element (HD.nullable (fromIntegral <$> HD.int8)))) <*>
           (HD.field (HD.nonNullable someUsersDecoder))
+
+{-DecoderNotNested-}
+someAutorsDecoderNotNested :: HD.Result (Vector Autors)
+someAutorsDecoderNotNested = HD.rowVector $ Types.Autors <$>
+          (HD.column (HD.nullable HD.text)) <*>
+          (HD.column $ HD.nullable $ HD.array $ HD.dimension Control.Monad.replicateM (HD.element (HD.nullable (fromIntegral <$> HD.int8)))) <*>
+          (HD.column (HD.nonNullable someUsersDecoder))
+
+
 
 {-Encoder for type Category-}
 someTagsEncoder :: HE.Params (Vector Tags)
@@ -128,10 +134,9 @@ someTagsEncoder =
         (HE.param $ HE.nonNullable $ fmap tag_name >$< HE.foldableArray (HE.nonNullable HE.text)) <>
         (HE.param $ HE.nonNullable $ (fmap tag_id) >$< HE.foldableArray (HE.nonNullable $ contramap fromIntegral HE.int8)) 
           
-          
 {-Decoder-}
-someTagsDecoder :: HD.Value (Vector Tags)
-someTagsDecoder = HD.vectorArray $ HD.nonNullable $ HD.composite $ Types.Tags <$>
+someTagsDecoder :: HD.Value (Vector (Maybe Tags))
+someTagsDecoder = HD.vectorArray $ HD.nullable $ HD.composite $ Types.Tags <$>
           (HD.field (HD.nonNullable HD.text)) <*>
           (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) 
 
@@ -147,21 +152,34 @@ someTagsEncoderNotNested =
         (tag_name >$< HE.param (HE.nonNullable HE.text)) <>
         (tag_id >$< HE.param (HE.nonNullable $ contramap fromIntegral HE.int8)) 
 
+{-Encoder for type Category-}
+someImageEncoder :: HE.Params (Vector Images)
+someImageEncoder = 
+        (HE.param $ HE.nonNullable $ fmap id_of_image >$< HE.foldableArray (HE.nonNullable HE.text)) <>
+        (HE.param $ HE.nonNullable $ (fmap image_new) >$< HE.foldableArray (HE.nonNullable $ contramap fromIntegral HE.int8)) 
+          
+{-Decoder-}
+someImageDecoder :: HD.Value (Vector (Maybe Images))
+someImageDecoder = HD.vectorArray $ HD.nullable $ HD.composite $ Types.Images <$>
+          (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*>
+          (HD.field (HD.nonNullable HD.text)) 
+
+
 {-Encoder for type Users-}
 someUsersEncoder :: HE.Params (Users)
 someUsersEncoder = 
           (image >$< HE.param (HE.nullable $ contramap encodeTextToBS HE.bytea)) <>
           (date_of_create_user >$< HE.param (HE.nonNullable HE.date)) <>
           (user_id >$< HE.param (HE.nonNullable $ contramap fromIntegral HE.int8)) <>
-          (first_name >$< HE.param (HE.nonNullable HE.text)) <>
-          (second_name >$< HE.param (HE.nonNullable HE.text)) 
+          (first_name >$< HE.param (HE.nullable HE.text)) <>
+          (second_name >$< HE.param (HE.nullable HE.text)) 
 
 {-Decoder-}
 someUsersDecoder :: HD.Value (Users)
 someUsersDecoder =  HD.composite $ Types.Users <$>
           (HD.field (HD.nonNullable HD.date)) <*>
-          (HD.field (HD.nonNullable HD.text)) <*>
-          (HD.field (HD.nonNullable HD.text)) <*>
+          (HD.field (HD.nullable HD.text)) <*>
+          (HD.field (HD.nullable HD.text)) <*>
           (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*>
           (HD.field (HD.nullable $ decodeBSToText <$> HD.bytea))
 
@@ -169,8 +187,8 @@ someUsersDecoder =  HD.composite $ Types.Users <$>
 someUsersDecoderNotNested :: HD.Result (Vector Users)
 someUsersDecoderNotNested =  HD.rowVector $ Types.Users <$>
           (HD.column (HD.nonNullable HD.date)) <*>
-          (HD.column (HD.nonNullable HD.text)) <*>
-          (HD.column(HD.nonNullable HD.text)) <*>
+          (HD.column (HD.nullable HD.text)) <*>
+          (HD.column(HD.nullable HD.text)) <*>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
           (HD.column (HD.nullable $ decodeBSToText <$> HD.bytea)) 
           
@@ -178,22 +196,29 @@ someUsersDecoderNotNested =  HD.rowVector $ Types.Users <$>
 someCommentsEncoder :: HE.Params Comments                      
 someCommentsEncoder = 
           (fromIntegral . id_of_comment >$< HE.param (HE.nonNullable HE.int8)) <>
-          (fromIntegral . user_id_comment >$< HE.param (HE.nonNullable HE.int8)) <>
+          (user_id_comment >$< someUsersEncoder) <>
           (fromIntegral . id_of_new_comment >$< HE.param (HE.nonNullable HE.int8)) <>
           (text_of_comment >$< HE.param (HE.nonNullable HE.text)) 
-          
+
+{-Encoder for type Comment-}
+someCommentsEncoderNotNested :: HE.Params CommentsNotNested                      
+someCommentsEncoderNotNested = 
+          (fromIntegral . id_of_comment_nt >$< HE.param (HE.nonNullable HE.int8)) <>
+          (user_id_comment_nt >$< HE.param (HE.nonNullable $ contramap fromIntegral HE.int8)) <>
+          (fromIntegral . id_of_new_comment_nt >$< HE.param (HE.nonNullable HE.int8)) <>
+          (text_of_comment_nt >$< HE.param (HE.nonNullable HE.text))        
 {-Decoder-}
-someCommentsDecoder :: HD.Value (Vector Comments)
-someCommentsDecoder = HD.vectorArray $ HD.nonNullable $ HD.composite $ Types.Comments <$>
+someCommentsDecoder :: HD.Value (Vector (Maybe Comments))
+someCommentsDecoder = HD.vectorArray $ HD.nullable $ HD.composite $ Types.Comments <$>
+          (HD.field (HD.nonNullable someUsersDecoder)) <*>
           (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*>
-          (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*> 
           (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*>
           (HD.field (HD.nonNullable HD.text)) 
 
 
 {-Decoder NotNested-}
-someCommentsDecoderNotNested :: HD.Result (Vector Comments)
-someCommentsDecoderNotNested = HD.rowVector $ Types.Comments <$>
+someCommentsDecoderNotNested :: HD.Result (Vector CommentsNotNested)
+someCommentsDecoderNotNested = HD.rowVector $ Types.CommentsNotNested <$>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*> 
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
@@ -235,9 +260,15 @@ someCategoriesDecoderNotNested = HD.rowVector $ Types.Category <$>
           (HD.column (HD.nonNullable HD.text)) <*>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) 
 
-
-
-connectToDB2 :: a -> BS.ByteString -> HE.Params a -> IO ()
+{-Decoder Registration-}
+someRegistrationEncoder ::  HE.Params Registration
+someRegistrationEncoder = 
+          (fromIntegral <$> user_id_reg >$< HE.param (HE.nonNullable HE.int8)) <>
+          (login  >$< HE.param (HE.nonNullable HE.text)) <>
+          (password  >$< HE.param (HE.nonNullable HE.text)) <>
+          (token >$< HE.param (HE.nonNullable HE.text)) 
+          
+connectToDB2 :: a -> BS.ByteString -> HE.Params a -> IO (StatusInsert a)
 connectToDB2 data1 query enc =
   let
     connectionSettings :: HC.Settings
@@ -247,7 +278,7 @@ connectToDB2 data1 query enc =
         (fromInteger 5432)
         "postgres"
         "password"
-        ""
+        "postgres23"
   in do
     connectionResult <- HC.acquire connectionSettings
     case connectionResult of
@@ -258,8 +289,13 @@ connectToDB2 data1 query enc =
         queryResult <- HS.run (selectTasksSession2 data1 query enc) connection
         HC.release connection
         case queryResult of
-          Right result -> return result
-          Left err -> error $ show err
+          Right result1 -> do
+                        putStrLn $ show $ encode (StatusInsert {ok1=True,result1=Just result1,error_description1=Nothing,error_id1=Nothing} :: Types.StatusInsert News)
+                        return $ StatusInsert {ok1=True,result1=Just result1,error_description1=Nothing,error_id1=Nothing} -- понять какой тип использовать для ошибки
+          Left err -> do
+                     putStrLn $ show $ encode (StatusInsert {ok1=False,result1=Nothing,error_description1=Just $ show err,error_id1=Just 404} :: Types.StatusInsert News)
+                     return $ StatusInsert {ok1=False,result1=Nothing,error_description1=Just "problem with syntax",error_id1=Just 404}
+
 
 
 selectTasksSession2 :: a ->  BS.ByteString -> HE.Params a -> HS.Session ()

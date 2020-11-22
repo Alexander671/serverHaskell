@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: b74610432a587506f551b259a6d003b5e7517d39923b2a78eea68bf6fb12f0b3
+-- hash: a10f88f9d901a054ec8d04f020b25a6b992d8a90849d5a67ca1688d3d32c7779
 
 name:           testPostgreSQL
 version:        0.1.0.0
@@ -38,6 +38,7 @@ library
     , bytestring
     , containers
     , contravariant-extras
+    , directory
     , hasql
     , hasql-th
     , http-types
@@ -55,8 +56,12 @@ library
 executable testPostgreSQL-exe
   main-is: Main.hs
   other-modules:
+      API
       DB
-      Logging
+      Logging.Entiry
+      Logging.File
+      Logging.Level
+      Logging.Logging
       Types
       Paths_testPostgreSQL
   hs-source-dirs:
@@ -68,6 +73,7 @@ executable testPostgreSQL-exe
     , bytestring
     , containers
     , contravariant-extras
+    , directory
     , hasql
     , hasql-th
     , http-types
@@ -97,6 +103,7 @@ test-suite testPostgreSQL-test
     , bytestring
     , containers
     , contravariant-extras
+    , directory
     , hasql
     , hasql-th
     , http-types

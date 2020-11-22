@@ -38,6 +38,7 @@ dependencies:
 - hasql-th
 - contravariant-extras
 - transformers
+- directory
 library:
   source-dirs: src
 
