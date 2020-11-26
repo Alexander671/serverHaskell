@@ -6,6 +6,7 @@ import Data.Aeson hiding (Result)
 import Data.Time (Day)
 import           GHC.Generics             hiding (from )
 import Data.Vector (Vector)
+import Data.ByteString (ByteString)
 {-----------------------}
 
 data StatusInsert a  = StatusInsert 
@@ -22,7 +23,8 @@ data Status a  = Status
   { ok :: Bool,
     result :: Maybe (Vector a),
     error_description :: Maybe String,
-    error_id :: Maybe Integer
+    error_id :: Maybe Integer,
+    role :: String
   } deriving (Show, Generic)
 
 instance FromJSON a => FromJSON (Status a) where
@@ -133,9 +135,11 @@ instance FromJSON CommentsNotNested where
 instance ToJSON CommentsNotNested where
 
 data Draft = Draft
-  { id_of_draft   :: Integer,
-    text_of_draft :: Text,
-    id_of_user    :: Integer
+  { id_of_user    :: Integer,
+    text_of_draft :: Maybe Text,
+    id_of_draft   :: Integer,
+    category_id_draft :: Integer,
+    photo_draft   :: Maybe Text
   } deriving (Show, Generic)
 instance FromJSON Draft where                            
 instance ToJSON Draft where
@@ -167,15 +171,15 @@ data Images = Images
 instance FromJSON Images where                            
 instance ToJSON Images where
 
-data Registration = Registration
+data LogInUp = LogInUp
   { user_id_reg :: Integer,
     login :: Text,
     password :: Text,
     token :: Text
   } deriving (Show,Generic)
 
-instance FromJSON Registration where                            
-instance ToJSON Registration where
+instance FromJSON LogInUp where                            
+instance ToJSON LogInUp where
 
 
 newtype Integer1 = Integer1

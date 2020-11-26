@@ -1,7 +1,7 @@
 echo "------------------------------"
 echo "Unsuccesful tests"
 echo "(1)Test of curl News (GET METHOD)"
-TOKEN="http://localhost:8000/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiVXNlciIsInVzZXJfaWQiOjI5fQ.6NN9o0rSpA9wC9wo7oJnJNI_WTPuBfXLl5aU7gmcZrA/1/"
+TOKEN="http://localhost:8000/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiVXNlciIsInVzZXJfaWQiOjI5fQ.6NN9o0rSpA9wC9wo7oJnJNI_WTPuBfXLl5aU7gmcZrA/0/"
 NEWS="news"
 NEWSFILTER1="news/filter?category=1"
 NEWSFILTER2="news/filter?category=6"

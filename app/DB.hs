@@ -23,11 +23,12 @@ import Data.Functor.Contravariant
     ( Contravariant(contramap), (>$<) ) 
 import Data.Aeson (ToJSON, encode)
 import qualified Data.Vector as DV
+import qualified Data.Text as DT
 
 {------------------------------------}
 
-connectToDB :: Data.Aeson.ToJSON a => Int -> BS.ByteString -> HD.Result (Vector a) -> IO (Status a)
-connectToDB pagin query dec  =
+connectToDB :: ToJSON a => String -> BS.ByteString -> HD.Result (Vector a) -> IO (Status a)
+connectToDB role query dec  =
   let
     connectionSettings :: HC.Settings
     connectionSettings =
@@ -48,11 +49,11 @@ connectToDB pagin query dec  =
         HC.release connection
         case queryResult of
           Right result1 -> do
-                        runLog INFO $ show $ encode $ Status {ok=True,result=Just $ DV.drop (10*(pagin-1)) $ DV.take (10*pagin) result1,error_description=Nothing,error_id=Nothing}
-                        return $ Status {ok=True,result=Just $ result1,error_description=Nothing,error_id=Nothing} -- понять какой тип использовать для ошибки
+                        runLog INFO $ show $ encode $ Status {ok=True,result=Just result1,error_description=Nothing,error_id=Nothing,role=role}
+                        return $ Status {ok=True,result=Just $ result1,error_description=Nothing,error_id=Nothing,role=role} -- понять какой тип использовать для ошибки
           Left err -> do
                      runLog DEBUG $ show $ err
-                     return $ Status {ok=False,result=Nothing,error_description=Just "problem with syntax",error_id=Just 404}
+                     return $ Status {ok=False,result=Nothing,error_description=Just "problem with syntax",error_id=Just 404,role=role}
 
 
 selectTasksSession ::  BS.ByteString -> HD.Result (Vector a) -> HS.Session (Vector a)
@@ -227,16 +228,21 @@ someCommentsDecoderNotNested = HD.rowVector $ Types.CommentsNotNested <$>
 {-Encoder for type Draft-}
 someDraftsEncoder :: HE.Params Draft                      
 someDraftsEncoder = 
-          (fromIntegral . id_of_draft >$< HE.param (HE.nonNullable HE.int8)) <>
           (fromIntegral . id_of_user  >$< HE.param (HE.nonNullable HE.int8)) <>
-          (text_of_draft >$< HE.param (HE.nonNullable HE.text))
+          (text_of_draft >$< HE.param (HE.nullable HE.text)) <>
+          (fromIntegral . id_of_draft >$< HE.param (HE.nonNullable HE.int8)) <>
+          (fromIntegral . category_id_draft  >$< HE.param (HE.nonNullable HE.int8)) <>
+          (photo_draft >$< HE.param (HE.nullable HE.text)) 
+          
           
 {-Decoder-}
 someDraftsDecoder :: HD.Result (Vector Draft)
 someDraftsDecoder = HD.rowVector $ Types.Draft <$>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
-          (HD.column (HD.nonNullable HD.text)) <*>
-          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) 
+          (HD.column (HD.nullable HD.text)) <*>
+          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
+          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
+          (HD.column (HD.nullable (fmap (DT.pack . BS.unpack) HD.bytea)))         
           
 
 {-Encoder for type Category-}
@@ -261,8 +267,8 @@ someCategoriesDecoderNotNested = HD.rowVector $ Types.Category <$>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) 
 
 {-Decoder Registration-}
-someRegistrationEncoder ::  HE.Params Registration
-someRegistrationEncoder = 
+someLogInUpEncoder ::  HE.Params LogInUp
+someLogInUpEncoder = 
           (fromIntegral <$> user_id_reg >$< HE.param (HE.nonNullable HE.int8)) <>
           (login  >$< HE.param (HE.nonNullable HE.text)) <>
           (password  >$< HE.param (HE.nonNullable HE.text)) <>

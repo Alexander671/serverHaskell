@@ -1,7 +1,7 @@
 ﻿echo "------------------------------"
 echo "Unsuccesful tests"
 echo "(1)Test of curl Autors (GET METHOD)"
-TOKEN="localhost:8000/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiQWRtaW4iLCJ1c2VyX2lkIjoyOX0.EPnw0fsAP2uYpPHlBIxMBrg4GpZpjCd7vXkBcJPBoSc/1/"
+TOKEN="localhost:8000/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiQWRtaW4iLCJ1c2VyX2lkIjoyOX0.EPnw0fsAP2uYpPHlBIxMBrg4GpZpjCd7vXkBcJPBoSc/0/"
 AUTORS="autors"
 #--------------------------
 AUTORSPOST="autors?user_id=12&description=ola-la"

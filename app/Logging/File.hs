@@ -18,7 +18,7 @@ newFile = do
     if (len > 50000)
     then do 
           timeNow <- getZonedTime
-          renameFile "app/Logging/log.log"  $ "log" ++ show timeNow ++ ".log"
+          renameFile "app/Logging/log.log"  $ "app/Logging/save/log" ++ show timeNow ++ ".log"
           writeFile "app/Logging/log.log" ""
     else putStrLn $ show len
 

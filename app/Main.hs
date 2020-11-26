@@ -5,25 +5,26 @@
 module Main where
 
 import API (statusError)
-
-{----------------------------------------}
+import Types
 import DB
-import qualified Hasql.Decoders as HD (text, nonNullable, rowVector, column, nullable, int8, noResult, Result)
+import qualified Hasql.Decoders as HD (text, nonNullable, rowVector, column, int8, Result)
 import qualified Hasql.Encoders as HE (Params, noParams)
 import Logging.Level (LogLevel(DEBUG, INFO))
 import Logging.Logging as L (runLog)
-import Types
-
-{----------------------------------------}
 import Web.JWT as JWT
-
+    ( claims,
+      decodeAndVerifySignature,
+      encodeSigned,
+      hmacSecret,
+      ClaimsMap(ClaimsMap, unClaimsMap),
+      JWTClaimsSet(unregisteredClaims),
+      Signer(HMACSecret) )
 import qualified Data.ByteString.Char8 as BS
 import Data.ByteString.Lazy (fromStrict)
 import qualified Data.ByteString.Lazy.Char8 as B (pack, unpack)
-import Data.ByteString.Lazy.UTF8
+import Data.ByteString.Lazy.UTF8 ( ByteString, toString )
 import Data.Map.Strict (toList)
 import Data.Text as DT (empty, Text, pack, unpack)
-
 import Network.HTTP.Types
   ( Status
   , badRequest400
@@ -43,13 +44,19 @@ import Network.Wai
   )
 import Network.Wai.Handler.Warp (run)
 import Control.Monad (join)
-
 import Data.Aeson as DA (toJSON, Value(String), ToJSON, encode)
 import Data.Time (fromGregorian)
 import Data.Vector as DV (Vector,head)
-import Data.Functor.Contravariant ()
 import qualified Data.Map as Map
+import Text.Read
 
+type Role = String
+type SQL = BS.ByteString
+data Route a = 
+              Encoder     SQL a (HE.Params a)    
+            | Decoder     SQL Role (HD.Result (Vector a))
+
+          
 {----------------------------------------}
 yoursecret :: BS.ByteString
 yoursecret = "SERVER_HASKELL"
@@ -60,65 +67,91 @@ main = do
   L.runLog INFO "Server is run.."
   run 8000 application
 
--- Web app
--- Parse of jwt-token and taking user role
 application :: Application
-application req respond = do
-  case pathInfo req of
-    ("registration":_) -> routeRegistration  req respond
-    ("login":_)        -> routeLogin         req respond
-    _ ->  
-     case fmap (Prelude.lookup "role") $ jwtCheck (route req) of
-     Just (Just role) -> applicationPath (DA.encode role) req respond
-     _ -> do
-       L.runLog DEBUG $
-         "error: problem with token" ++ (show $ jwtCheck (route req))
-       respond $
-         responseBadRequestJSON $ DA.encode ("error: problem with token" :: Text)
-       ----------------------------
+application req = routePath req (takeRoleJWT req) req
+
+
+-- Parse of jwt-token and taking user role
+takeRoleJWT :: Request -> ByteString
+takeRoleJWT req =
+  if length (pathInfo req) > 2 
+  then  
+    case Prelude.lookup "role" <$> jwtCheck (route req) of
+    Just (Just role) -> DA.encode role
+    _ -> DA.encode (show $ jwtCheck (route req))
+  else ""     
 
 --help function for role and pagination
 route :: Request -> Text
 route req = Prelude.head $ helphead (pathInfo req)
+       where helphead [] = ["error: problem with token"]
+             helphead (x:_) = [x]
 
-jwtCheck :: Text -> (Maybe [(Text, Value)])
+jwtCheck :: Text -> Maybe [(Text, Value)]
 jwtCheck content =
-  fmap
-    (toList . unClaimsMap . unregisteredClaims . JWT.claims)
-    (JWT.decodeAndVerifySignature (HMACSecret yoursecret) content)
+  fmap (toList . unClaimsMap . unregisteredClaims . JWT.claims)
+  (JWT.decodeAndVerifySignature (HMACSecret yoursecret) content)
+---------------------------------------
 
-helphead [] = ["error: problem with token"]
-helphead (x:_) = [x]
-
-applicationPath :: ByteString -> Application
-applicationPath role req respond =
+routePath req =
   case pathInfo req of
-    (_:_:"news":id1:"comments":_) -> routeComments id1 role req respond
-    (_:_:"news":_)                -> routeNews     role req respond
-    (_:_:"autors":_)              -> routeAutors   role req respond
-    (_:_:"drafts":_)              -> routeDrafts   role req respond
-    (_:_:"users":"me":_)          -> routeMe       role req respond
-    (_:_:"users":_)               -> routeUsers    role req respond
-    (_:_:"tags":_)                -> routeTags     role req respond
-    (_:_:"categories":_)          -> routeCategory role req respond
-    _ ->
-      respond $
-      responseNotFoundJSON $ encode $ statusError $ Just "error: no Path"
+    ("registration":_)            -> routeRegistration
+    ("login":_)                   -> routeLogin    
+    (_:_:"news":id1:"comments":_) -> routeComments id1  
+    (_:_:"news":_)                -> routeNews     
+    (_:_:"autors":_)              -> routeAutors   
+    (_:_:"drafts":_)              -> routeDrafts   
+    (_:_:"users":"me":_)          -> routeMe       
+    (_:_:"users":_)               -> routeUsers    
+    (_:_:"tags":_)                -> routeTags     
+    (_:_:"categories":_)          -> routeCategory 
+    _ -> routeError
 
-routeRegistration req respond = 
+routeError = undefined
+
+
+dbQueryMain :: ToJSON a => Route a -> Application
+dbQueryMain (Encoder sql data1 prms) req respond = dbQueryInsert data1 sql prms req respond   
+dbQueryMain (Decoder sql role a) req respond     = dbQuery role a sql req respond 
+
+dbQuery :: ToJSON a => String -> HD.Result (Vector a) -> BS.ByteString -> Application
+dbQuery role dec sql req respond = do
+  res <- connectToDB role (BS.pack ((BS.unpack sql) ++ limitOffset req)) dec
+  (respond $
+   responseOkJSON
+     (case res of
+        _ -> encode res))
+        
+limitOffset :: Request -> String
+limitOffset req = fromJust $ fmap (show . (5 *)) (readMaybe (pagin req)::Maybe Int)
+        where fromJust Nothing  =""
+              fromJust (Just x) =  " LIMIT 5 OFFSET " ++ x
+pagin :: Request -> String
+pagin req = (DT.unpack $ last $ Prelude.take 2 $ (pathInfo req)) 
+
+dbQueryInsert :: ToJSON a => a -> BS.ByteString -> HE.Params a -> Application
+dbQueryInsert data1 sql enc req respond = do
+  res <- connectToDB2 data1 sql enc
+  (respond $
+   responseOkJSON
+     (case rawQueryString req of
+        _ -> encode res))
+
+routeRegistration :: ByteString -> Application
+routeRegistration role req respond = 
   case requestMethod req of
     "POST" -> case fmap join (lookupStuff ["login", "password"] req) of
               (Just login:Just password:_) -> 
-                dbQueryReg
+                dbQueryReg (toString role)
                 ((toString . fromStrict) login)
-                (Registration
+                (LogInUp
                    { user_id_reg = 0
                    , login = (DT.pack . toString . fromStrict) login
                    , password = (DT.pack . toString . fromStrict) password
                    , token = ""
                    })
                 insertSqlRegistr
-                someRegistrationEncoder
+                someLogInUpEncoder
                 req
                 respond
               _ -> respond $
@@ -128,10 +161,9 @@ routeRegistration req respond =
          responseNotFoundJSON $
          encode $ statusError $ Just "error : problem with Method (registration)"
 
-dbQueryReg :: ToJSON a => String -> a -> BS.ByteString -> HE.Params a -> Application
-dbQueryReg log data1 sql enc req respond = do
+dbQueryReg role log data1 sql enc req respond = do
   res1 <- connectToDB2 data1 sql enc
-  id1  <- connectToDB 1 (BS.pack $ "SELECT user_id FROM registration WHERE login = '" ++ log ++ "'") (HD.rowVector $ Types.Integer1 <$> (HD.column (HD.nonNullable $ fromIntegral <$> HD.int8)))        
+  id1  <- connectToDB role (BS.pack $ "SELECT user_id FROM registration WHERE login = '" ++ log ++ "'") (HD.rowVector $ Types.Integer1 <$> (HD.column (HD.nonNullable $ fromIntegral <$> HD.int8)))        
   res2 <- connectToDB2  data1 (BS.pack $ "UPDATE registration SET token = '" ++ (DT.unpack $ createToken $ int <$> (getId id1)) ++ "' WHERE user_id = " ++ (fromMaybe $ getId id1)) enc        
   print "-------------------"
   print log
@@ -148,7 +180,7 @@ dbQueryReg log data1 sql enc req respond = do
         fromMaybe (Just x) = show $ int x 
         createToken (Just x) = let
                         cs = mempty { 
-                        unregisteredClaims = ClaimsMap $ Map.fromList [(DT.pack "user_id",toJSON x),(DT.pack "role",String "User")]
+                        unregisteredClaims = ClaimsMap $ Map.fromList [(DT.pack "user_id",toJSON x),(DT.pack "role",DA.String "User")]
                         }
                         key = hmacSecret $ DT.pack $ BS.unpack yoursecret
                         in encodeSigned key mempty cs
@@ -157,20 +189,20 @@ dbQueryReg log data1 sql enc req respond = do
 insertSqlRegistr :: BS.ByteString
 insertSqlRegistr = BS.pack "INSERT INTO registration(user_id,login,password,token) VALUES(DEFAULT,$2,$3,'')"
 
-routeLogin ::  Application
-routeLogin req respond = 
+routeLogin :: ByteString -> Application
+routeLogin role req respond = 
   case queryString req of
-    [("login",Just login),("password",Just password)] -> dbQuery (HD.rowVector $ Types.Text1 <$> (HD.column (HD.nonNullable HD.text))) 
-                                               (BS.pack $ "SELECT token FROM registration WHERE login = '" ++ BS.unpack login ++ "' AND password = '" ++ BS.unpack password ++ "';") req respond
+    [("login",Just login),("password",Just password)] -> dbQuery (toString role) (HD.rowVector $ Types.Text1 <$> (HD.column (HD.nonNullable HD.text))) 
+                                               (BS.pack $ "SELECT token FROM registration WHERE login = '" ++ BS.unpack login ++ "' AND password = '" ++ BS.unpack password ++ "'") req respond
     _ -> respond $
          responseNotFoundJSON $
          encode $ statusError $ Just "error : no query (Login)"
 
 routeNews :: ByteString -> Application
-routeNews _ req respond =
+routeNews role req respond =
   case pathInfo req of
     [_,_, "news"] ->
-      dbQuery
+      dbQuery (toString role)
         someNewsDecoder
         (BS.pack $ selectSqlNews ++ " ORDER BY nn.id_of_new DESC")
         req
@@ -178,39 +210,39 @@ routeNews _ req respond =
     [_,_, "news", "filter"] ->
       case queryString req of
         ("date_of_create_at_gt", Just x):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
             (BS.pack $
              selectSqlNews ++
-             "AND nn.date_of_create > '" ++ BS.unpack x ++ "' ;")
+             "AND nn.date_of_create > '" ++ BS.unpack x ++ "' ")
             req
             respond
         ("date_of_create_at_lt", Just x):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
             (BS.pack $
              selectSqlNews ++
-             "AND nn.date_of_create < '" ++ BS.unpack x ++ "' ;")
+             "AND nn.date_of_create < '" ++ BS.unpack x ++ "' ")
             req
             respond
         ("name_of_autor", Just x):_ ->
-          dbQuery
-            someNewsDecoder
+          dbQuery (toString role)
+            someNewsDecoder 
             (BS.pack $
              selectSqlNews ++
-             "AND ((nn.a).u).first_name = '" ++ BS.unpack x ++ "' ;")
+             "AND ((nn.a).u).first_name = '" ++ BS.unpack x ++ "' ")
             req
             respond
         ("category", Just x):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
             (BS.pack $
              selectSqlNews ++
-             "AND (nn.categories).category_id = '" ++ BS.unpack x ++ "'  ;")
+             "AND (nn.categories).category_id = '" ++ BS.unpack x ++ "'  ")
             req
             respond
         ("tag", Just x):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
             (BS.pack $
              "SELECT * FROM nestednews nn, unnest(nn.tags) as unntag WHERE unntag.tag_id=" ++
@@ -218,42 +250,42 @@ routeNews _ req respond =
             req
             respond
         ("tag_in", Just x):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
             (BS.pack $
              "SELECT * FROM nestednews nn, unnest(nn.tags) as unntag WHERE unntag.tag_id = ANY(ARRAY" ++
-             BS.unpack x ++ ");")
+             BS.unpack x ++ ")")
             req
             respond
         ("tag_all", Just x):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
             (BS.pack $
              "SELECT * FROM nestednews nn, unnest(nn.tags) as unntag WHERE unntag.tag_id = ALL(ARRAY" ++
-             BS.unpack x ++ "::integer[]);")
+             BS.unpack x ++ "::integer[]) ")
             req
             respond
         ("name", Just x):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
             (BS.pack $
              selectSqlNews ++
-             "AND (nn.name) LIKE ('%" ++ BS.unpack x ++ "%'::text)  ;")
+             "AND (nn.name) LIKE ('%" ++ BS.unpack x ++ "%'::text)  ")
             req
             respond
         ("text_of_new", Just x):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
             (BS.pack $
              selectSqlNews ++
-             "AND (nn.text_of_new) LIKE ('%" ++ BS.unpack x ++ "%'::text) ;")
+             "AND (nn.text_of_new) LIKE ('%" ++ BS.unpack x ++ "%'::text) ")
             req
             respond
         ("id_of_new", Just x):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
             (BS.pack $
-             selectSqlNews ++ "AND nn.id_of_new= " ++ BS.unpack x ++ " ;")
+             selectSqlNews ++ "AND nn.id_of_new= " ++ BS.unpack x ++ " ")
             req
             respond
         _ ->
@@ -264,39 +296,39 @@ routeNews _ req respond =
     [_,_, "news", "order"] ->
       case queryString req of
         ("date_of_create", Just x):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
             (BS.pack $
              selectSqlNews ++
-             " ORDER BY nn.date_of_create " ++ BS.unpack x ++ ";")
+             " ORDER BY nn.date_of_create " ++ BS.unpack x)
             req
             respond
         ("name_of_autor", Just x):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
             (BS.pack $
              selectSqlNews ++
-             " ORDER BY ((nn.a).u).first_name " ++ BS.unpack x ++ ";")
+             " ORDER BY ((nn.a).u).first_name " ++ BS.unpack x)
             req
             respond
         ("category", Just x):_ ->
-          dbQuery
-            someNewsDecoder
+          dbQuery (toString role)
+            someNewsDecoder 
             (BS.pack $
              selectSqlNews ++
-             " ORDER BY (nn.categories).category_name " ++ BS.unpack x ++ ";")
+             " ORDER BY (nn.categories).category_name " ++ BS.unpack x)
             req
             respond
         ("amount_of_photo", Just "DESC"):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
-            (BS.pack $ selectSqlNews ++ " ORDER BY array_length(images,2);")
+            (BS.pack $ selectSqlNews ++ " ORDER BY array_length(images,2)")
             req
             respond
         ("amount_of_photo", Just "ASC"):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
-            (BS.pack $ selectSqlNews ++ " ORDER BY array_length(images,1);")
+            (BS.pack $ selectSqlNews ++ " ORDER BY array_length(images,1)")
             req
             respond
         _ ->
@@ -307,10 +339,10 @@ routeNews _ req respond =
     [_,_, "news", "search"] ->
       case queryString req of
         ("content", Just x):_ ->
-          dbQuery
+          dbQuery (toString role)
             someNewsDecoder
             (BS.pack $
-             "SELECT * FROM nestedNewsSearch('%" ++ BS.unpack x ++ "%');")
+             "SELECT * FROM nestedNewsSearch('%" ++ BS.unpack x ++ "%')")
             req
             respond
         _ ->
@@ -332,9 +364,9 @@ routeAutors role req respond =
     "\"Admin\"" ->
       case requestMethod req of
         "GET" ->
-          dbQuery
+          dbQuery (toString role)
             someAutorsDecoderNotNested
-            (BS.pack "SELECT * FROM nestedautor;")
+            (BS.pack "SELECT * FROM nestedautor")
             req
             respond
           {----------------------------------------------------------------}
@@ -401,16 +433,16 @@ routeAutors role req respond =
     _ -> respond $ responseNotFoundJSON $ B.pack $ "role is " ++ (B.unpack role)
 
 putAutors,insertsqlAutor,deletesqlAutor :: BS.ByteString
-putAutors = BS.pack "UPDATE autors SET description = $1 WHERE user_id=$2;"
+putAutors = BS.pack "UPDATE autors SET description = $1 WHERE user_id=$2"
 
-insertsqlAutor = BS.pack "INSERT INTO autors(user_id, description) VALUES ($2,$1);"
+insertsqlAutor = BS.pack "INSERT INTO autors(user_id, description) VALUES ($2,$1)"
 
-deletesqlAutor = BS.pack "DELETE FROM autors WHERE user_id = $2;"
+deletesqlAutor = BS.pack "DELETE FROM autors WHERE user_id = $2"
 
 routeCategory :: ByteString -> Application
 routeCategory role req respond
   | requestMethod req == "GET" =
-    dbQuery
+    dbQuery (toString role)
       someCategoriesDecoderNotNested
       ("SELECT * FROM categories")
       req
@@ -429,7 +461,7 @@ routeCategory role req respond
                  , category_name = DT.pack $ toString $ fromStrict $ catName
                  , category_id = 0
                  })
-              "INSERT INTO categories(child_id,category_name,category_id) VALUES ($1,$2,DEFAULT);"
+              "INSERT INTO categories(child_id,category_name,category_id) VALUES ($1,$2,DEFAULT)"
               someCategoriesEncoder
               req
               respond
@@ -463,7 +495,7 @@ routeCategory role req respond
                      ((\x -> read x :: Integer) . toString . fromStrict)
                        categoryId
                  })
-              ("UPDATE categories SET category_name = $2, child_id = $1 WHERE category_id=$3;")
+              ("UPDATE categories SET category_name = $2, child_id = $1 WHERE category_id=$3")
               (someCategoriesEncoder)
               req
               respond
@@ -480,9 +512,9 @@ routeCategory role req respond
 routeTags :: ByteString -> Application
 routeTags role req respond
     | requestMethod req == "GET" =
-        dbQuery
-        (someTagsDecoderNotNested)
-        ("SELECT * FROM tags")
+        dbQuery (toString role)
+        someTagsDecoderNotNested
+        "SELECT * FROM tags"
         req
         respond
     | role == "\"Admin\"" =
@@ -492,7 +524,7 @@ routeTags role req respond
               [Just tag] ->
                 dbQueryInsert
                 (Tags {tag_name = (DT.pack . BS.unpack) tag, tag_id = 0})
-                ("INSERT INTO tags(tag_name,tag_id) VALUES ($1,DEFAULT);")
+                ("INSERT INTO tags(tag_name,tag_id) VALUES ($1,DEFAULT)")
                 (someTagsEncoderNotNested)
                 req
                 respond
@@ -521,7 +553,7 @@ routeTags role req respond
               { tag_name = DT.pack $ toString $ fromStrict $ tagText
               , tag_id =((\x -> read x :: Integer) . toString . fromStrict) tagId
               })
-              ("UPDATE tags SET tag_name = $1 WHERE tag_id=$2;")
+              ("UPDATE tags SET tag_name = $1 WHERE tag_id=$2")
               (someTagsEncoderNotNested)
               req
               respond
@@ -554,22 +586,24 @@ routeDrafts role req respond =
         _ ->
           case requestMethod req of
             "GET" ->
-              dbQuery
+              dbQuery (toString role)
                 someDraftsDecoder
                 (selectsqlDraft req)
                 req
                 respond
                           {-----------------------------------------------------------------}
             "POST" ->
-              case fmap join (lookupStuff ["text_of_draft"] req) of
-                ([(Just z)]) ->
+              case fmap join (lookupStuff ["text_of_draft","category_id","photo"] req) of
+                [txt,Just cat,pht] ->
                   dbQueryInsert
                     (Draft
-                       { id_of_draft = 0
-                       , id_of_user = read $ getId req
-                       , text_of_draft = DT.pack (toString $ fromStrict z)
+                       { id_of_user = read $ getId req
+                       , text_of_draft = fmap (DT.pack . toString . fromStrict) txt
+                       , id_of_draft = 0
+                       , category_id_draft = (read . BS.unpack) cat :: Integer
+                       , photo_draft = fmap (DT.pack . BS.unpack)pht
                        })
-                    (insertsqlDraft)
+                    insertsqlDraft
                     someDraftsEncoder
                     req
                     respond
@@ -581,15 +615,17 @@ routeDrafts role req respond =
                   Just "error: Problem with queryString (drafts) POST"
                           {----------------------------------------------------------------------}
             "PUT" ->
-              case fmap join (lookupStuff ["id_of_draft", "text_of_draft"] req) of
-                ([(Just x), (Just z)]) ->
+              case fmap join (lookupStuff ["draft_id","text_of_draft","category_id","photo"] req) of
+                [Just id1,txt,Just cat,pht] ->
                   dbQueryInsert
                     (Draft
-                       { id_of_draft = read (toString $ fromStrict x)
-                       , id_of_user = read $ getId req
-                       , text_of_draft = DT.pack (toString $ fromStrict z)
+                       { id_of_user = read $ getId req
+                       , text_of_draft = fmap (DT.pack . toString . fromStrict) txt
+                       , id_of_draft = read (BS.unpack id1) :: Integer
+                       , category_id_draft = (read . BS.unpack) cat :: Integer
+                       , photo_draft = fmap (DT.pack . BS.unpack)pht
                        })
-                    (updateqlDraft)
+                    updateqlDraft
                     someDraftsEncoder
                     req
                     respond
@@ -602,7 +638,7 @@ routeDrafts role req respond =
                           {----------------------------------------------------------------------}
             "DELETE" ->
               case fmap join (lookupStuff ["id_of_draft"] req) of
-                ([(Just x)]) ->
+                [Just x] ->
                   dbQueryInsert () (deleteSqlDraft req) HE.noParams req respond
                 _ ->
                   respond $
@@ -617,27 +653,27 @@ routeDrafts role req respond =
 insertsqlDraft,updateqlDraft,insertsqlNews :: BS.ByteString
 insertsqlDraft =
   BS.pack
-    "INSERT INTO drafts(id_of_draft,user_id,text_of_draft) VALUES (DEFAULT,$2,$3);"
+    "INSERT INTO drafts(user_id,text_of_draft,id_of_draft,category_id,photo) VALUES ($1,$2,DEFAULT,$4,$5) "
 
 insertsqlNews =
-  BS.pack "UPDATE news n SET text_of_new = d.text_of_draft FROM drafts d WHERE n.id_of_new=2 and d.id_of_draft=4 ; "
+  BS.pack ""
 
 updateqlDraft =
-  BS.pack "UPDATE drafts SET text_of_draft = $3 WHERE id_of_draft=$1;"
+  BS.pack "UPDATE drafts SET text_of_draft = $2, category_id=$4, photo=$5 WHERE id_of_draft=$3 "
 
 deleteSqlDraft,selectsqlDraft :: Request -> BS.ByteString
 deleteSqlDraft req =
-  BS.pack $ "DELETE FROM drafts WHERE id_of_draft = " ++ (getId req) ++ ";"
+  BS.pack $ "DELETE FROM drafts WHERE id_of_draft = " ++ (getId req)
 
 selectsqlDraft req =
-  BS.pack $ "SELECT * FROM drafts WHERE user_id=" ++ (getId req) ++ ";"
+  BS.pack $ "SELECT * FROM drafts WHERE user_id=" ++ (getId req)
 
 {-------------------------------}
 
 routeMe :: ByteString -> Application
 routeMe role req respond 
   | requestMethod req == "GET" =
-        dbQuery
+        dbQuery (toString role)
           someUsersDecoderNotNested
           (selectSqlUserid $ getId req)
           req
@@ -650,7 +686,7 @@ routeMe role req respond
 routeUsers :: ByteString -> Application
 routeUsers role req respond
   | requestMethod req == "GET" =
-        dbQuery
+        dbQuery (toString role)
           (someUsersDecoderNotNested)
           (selectSqlUser)
           req
@@ -691,23 +727,23 @@ routeUsers role req respond
     encode $ statusError $ Just "Problem with reqMethod (users)"
 
 selectSqlUser,insertsqlUsers,updateSqlUser :: BS.ByteString
-selectSqlUser = BS.pack "SELECT * FROM users;"
+selectSqlUser = BS.pack "SELECT * FROM users"
 
 insertsqlUsers = "INSERT INTO users(image,date_of_create,user_id,first_name,second_name) VALUES ($1,DEFAULT,DEFAULT,$4,$5)"
 
-updateSqlUser = "UPDATE users SET first_name = $4, second_name=$5, image =$1 WHERE user_id=$3;"
+updateSqlUser = "UPDATE users SET first_name = $4, second_name=$5, image =$1 WHERE user_id=$3 "
 
 selectSqlUserid,deleteSqlUser :: String -> BS.ByteString
-selectSqlUserid x = BS.pack $ "SELECT * FROM users WHERE user_id = " ++ x ++ ";"
+selectSqlUserid x = BS.pack $ "SELECT * FROM users WHERE user_id = " ++ x 
 
 deleteSqlUser user =
-  BS.pack $ "DELETE FROM registration WHERE user_id = " ++ user ++ ";"
+  BS.pack $ "DELETE FROM registration WHERE user_id = " ++ user 
 
 
 routeComments :: Text -> ByteString -> Application
 routeComments idNew role req respond
   | requestMethod req == "GET" =
-    dbQuery
+    dbQuery (toString role)
       someCommentsDecoderNotNested
       (selectSqlComment $ DT.unpack idNew)
       req
@@ -725,7 +761,7 @@ routeComments idNew role req respond
               req
               respond
           "\"Autor\"" ->
-            dbQuery
+            dbQuery (toString role)
               someCommentsDecoderNotNested
               (deleteSqlComment2 (BS.unpack idComment) $ getId req)
               req
@@ -771,12 +807,12 @@ deleteSqlComment1 idOfComment =
   BS.pack $ "DELETE FROM comments WHERE id_of_comment = " ++ idOfComment
 
 selectSqlComment id1 =
-  BS.pack $ "SELECT * FROM comments WHERE id_of_new =" ++ id1 ++ " ;"
+  BS.pack $ "SELECT * FROM comments WHERE id_of_new =" ++ id1
 
 deleteSqlComment2 :: String -> String -> BS.ByteString
 deleteSqlComment2 idOfNew idOfComment =
   BS.pack $ "DELETE FROM comments WHERE id_of_comment = " ++
-  idOfComment ++ " AND id_of_new = " ++ idOfNew ++ ";"
+  idOfComment ++ " AND id_of_new = " ++ idOfNew 
 
 insertSqlComment :: BS.ByteString
 insertSqlComment =
@@ -793,36 +829,6 @@ lookupStuff [] _ = []
 lookupStuff (stuff:s) lst =
   (Prelude.lookup stuff $ queryString lst) : (lookupStuff s lst)
 
-
-dbQuery :: ToJSON a =>
-     HD.Result (Vector a)
-  -> BS.ByteString
-  -> Application
-dbQuery dec sql req respond = do
-  res <- connectToDB 2 sql dec
-  (respond $
-   responseOkJSON
-     (case res of
-        _ -> encode res))
-        
-pagin :: Request -> Int
-pagin req = read (DT.unpack $ last $ Prelude.take 2 $ helphead (pathInfo req)) :: Int
-
-dbQueryInsert :: ToJSON a => a -> BS.ByteString -> HE.Params a -> Application
-dbQueryInsert data1 sql enc req respond = do
-  res <- connectToDB2 data1 sql enc
-  (respond $
-   responseOkJSON
-     (case rawQueryString req of
-        _ -> encode res))
-
-dbQueryPOSTUser :: ToJSON a => a -> BS.ByteString -> HE.Params a -> Application
-dbQueryPOSTUser data1 sql enc req respond = do
-  res <- connectToDB2 data1 sql enc
-  (respond $
-   responseOkJSON
-     (case rawQueryString req of
-        _ -> encode res))
 
 
 responseOkJSON, responseNotFoundJSON, responseBadRequestJSON ::
