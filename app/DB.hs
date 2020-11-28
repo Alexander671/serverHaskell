@@ -92,20 +92,8 @@ someNewsDecoder =  HD.rowVector $ Types.News <$>
           (HD.column $ HD.nullable someImageDecoder) <*>
           (HD.column $ HD.nullable HD.date) <*>
           (HD.column $ HD.nullable someCommentsDecoder) <*>
-          (HD.column $ HD.nullable HD.text)
-
-{-Decoder-}
-someNewsDecoderNotNested :: HD.Result (Vector NewsNotNested)
-someNewsDecoderNotNested =  HD.rowVector $ Types.NewsNotNested <$> 
           (HD.column $ HD.nullable HD.text) <*>
-          (HD.column $ HD.nullable HD.text) <*>
-          (HD.column (HD.nullable $ fromIntegral <$> HD.int8)) <*>
-          (HD.column (HD.nullable $ fromIntegral <$> HD.int8)) <*>
-          (HD.column $ HD.nullable HD.date) <*>
-          (HD.column (HD.nullable $ fromIntegral <$> HD.int8)) <*>
-          (HD.column $ HD.nullable (HD.vectorArray (HD.nonNullable (fromIntegral <$> HD.int8)))) <*>
-          (HD.column $ HD.nullable HD.text)
-          
+          (HD.column $ HD.nonNullable HD.bool)
 
 {-Encoder for type Autors-}
 someAutorsEncoder :: HE.Params AutorsEncoder

@@ -51,7 +51,8 @@ data News = News
     images :: Maybe (Vector (Maybe Images)),
     date_of_create_new :: Maybe Day,
     comments :: Maybe (Vector (Maybe Comments)),
-    photo :: Maybe Text
+    photo :: Maybe Text,
+    publish :: Bool
   } deriving (Show, Generic)
 
 instance FromJSON News where

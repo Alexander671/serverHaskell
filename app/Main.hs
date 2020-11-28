@@ -7,24 +7,21 @@ module Main where
 import API (statusError)
 import Types
 import DB
+import JWT (getId, route, jwtCheck, yoursecret, takeRoleJWT)
 import qualified Hasql.Decoders as HD (text, nonNullable, rowVector, column, int8, Result)
 import qualified Hasql.Encoders as HE (Params, noParams)
-import Logging.Level (LogLevel(DEBUG, INFO))
+import Logging.Level (LogLevel(INFO))
 import Logging.Logging as L (runLog)
 import Web.JWT as JWT
-    ( claims,
-      decodeAndVerifySignature,
-      encodeSigned,
+    ( encodeSigned,
       hmacSecret,
       ClaimsMap(ClaimsMap, unClaimsMap),
-      JWTClaimsSet(unregisteredClaims),
-      Signer(HMACSecret) )
+      JWTClaimsSet(unregisteredClaims) )
 import qualified Data.ByteString.Char8 as BS
 import Data.ByteString.Lazy (fromStrict)
 import qualified Data.ByteString.Lazy.Char8 as B (pack, unpack)
 import Data.ByteString.Lazy.UTF8 ( ByteString, toString )
-import Data.Map.Strict (toList)
-import Data.Text as DT (empty, Text, pack, unpack)
+import Data.Text as DT (empty, pack, unpack)
 import Network.HTTP.Types
   ( Status
   , badRequest400
@@ -48,18 +45,32 @@ import Data.Aeson as DA (toJSON, Value(String), ToJSON, encode)
 import Data.Time (fromGregorian)
 import Data.Vector as DV (Vector,head)
 import qualified Data.Map as Map
-import Text.Read
+import Text.Read ( readMaybe )
+
 
 type Role = String
 type SQL = BS.ByteString
-data Route a = 
-              Encoder     SQL a (HE.Params a)    
-            | Decoder     SQL Role (HD.Result (Vector a))
-
-          
-{----------------------------------------}
-yoursecret :: BS.ByteString
-yoursecret = "SERVER_HASKELL"
+type Message = String
+data Route = 
+              EncoderLogInUp   SQL LogInUp
+            | DecoderLogInUp   SQL Role
+            | RouteRegistration Role String LogInUp SQL
+            | DecoderComments  SQL Role 
+            | EncoderComments  SQL CommentsNotNested
+            | DecoderNews      SQL Role
+            | EncoderAutors    SQL AutorsEncoder
+            | DecoderAutors    SQL Role
+            | EncoderDrafts    SQL Draft
+            | DecoderDrafts    SQL Role
+            | DecoderMe        SQL Role
+            | EncoderUsers     SQL Users
+            | DecoderUsers     SQL Role
+            | EncoderTags      SQL Tags
+            | DecoderTags      SQL Role
+            | EncoderCategories SQL Category
+            | DecoderCategories SQL Role
+            | EncoderNoParams  SQL
+            | Error Message
 
 -- Main function
 main :: IO ()
@@ -68,82 +79,77 @@ main = do
   run 8000 application
 
 application :: Application
-application req = routePath req (takeRoleJWT req) req
-
-
--- Parse of jwt-token and taking user role
-takeRoleJWT :: Request -> ByteString
-takeRoleJWT req =
-  if length (pathInfo req) > 2 
-  then  
-    case Prelude.lookup "role" <$> jwtCheck (route req) of
-    Just (Just role) -> DA.encode role
-    _ -> DA.encode (show $ jwtCheck (route req))
-  else ""     
-
---help function for role and pagination
-route :: Request -> Text
-route req = Prelude.head $ helphead (pathInfo req)
-       where helphead [] = ["error: problem with token"]
-             helphead (x:_) = [x]
-
-jwtCheck :: Text -> Maybe [(Text, Value)]
-jwtCheck content =
-  fmap (toList . unClaimsMap . unregisteredClaims . JWT.claims)
-  (JWT.decodeAndVerifySignature (HMACSecret yoursecret) content)
+application req respond = let roleJWT = takeRoleJWT req
+                              route   = routePath req roleJWT
+                          in dbQueryMain route req respond
+ 
 ---------------------------------------
-
-routePath req =
+routePath :: Request -> ByteString -> Route
+routePath req role =
   case pathInfo req of
-    ("registration":_)            -> routeRegistration
-    ("login":_)                   -> routeLogin    
-    (_:_:"news":id1:"comments":_) -> routeComments id1  
-    (_:_:"news":_)                -> routeNews     
-    (_:_:"autors":_)              -> routeAutors   
-    (_:_:"drafts":_)              -> routeDrafts   
-    (_:_:"users":"me":_)          -> routeMe       
-    (_:_:"users":_)               -> routeUsers    
-    (_:_:"tags":_)                -> routeTags     
-    (_:_:"categories":_)          -> routeCategory 
-    _ -> routeError
-
-routeError = undefined
+    ("registration":_)            -> routeRegistration role req 
+    ("login":_)                   -> routeLogin role   req 
+    (_:_:"news":id1:"comments":_) -> routeComments id1 role  req 
+    (_:_:"news":_)                -> routeNews role  req    
+    (_:_:"autors":_)              -> routeAutors role req 
+    (_:_:"drafts":_)              -> routeDrafts role req
+    (_:_:"users":"me":_)          -> routeMe role req   
+    (_:_:"users":_)               -> routeUsers role req   
+    (_:_:"tags":_)                -> routeTags role req   
+    (_:_:"categories":_)          -> routeCategory role req
+    _ -> Error ""
 
 
-dbQueryMain :: ToJSON a => Route a -> Application
-dbQueryMain (Encoder sql data1 prms) req respond = dbQueryInsert data1 sql prms req respond   
-dbQueryMain (Decoder sql role a) req respond     = dbQuery role a sql req respond 
 
+dbQueryMain :: Route -> Application
+dbQueryMain (EncoderLogInUp sql data1)  req respond = dbQueryInsert data1 sql someLogInUpEncoder req respond   
+dbQueryMain (DecoderLogInUp sql role)   req respond = dbQuery role (HD.rowVector $ Types.Text1 <$> HD.column (HD.nonNullable HD.text)) sql req respond
+dbQueryMain (RouteRegistration role log a sql) req respond = dbQueryReg role log a sql someLogInUpEncoder req respond
+dbQueryMain (DecoderComments  sql role) req respond = dbQuery role someCommentsDecoderNotNested sql req respond
+dbQueryMain (EncoderComments  sql data1)req respond = dbQueryInsert data1 sql someCommentsEncoderNotNested req respond
+dbQueryMain (DecoderNews      sql role) req respond = dbQuery role someNewsDecoder sql req respond
+dbQueryMain (DecoderAutors    sql role) req respond = dbQuery role someAutorsDecoderNotNested sql req respond
+dbQueryMain (EncoderAutors    sql data1)req respond = dbQueryInsert data1 sql someAutorsEncoder req respond
+dbQueryMain (DecoderUsers     sql role) req respond = dbQuery role someUsersDecoderNotNested sql req respond   
+dbQueryMain (EncoderUsers     sql data1)req respond = dbQueryInsert data1 sql someUsersEncoder req respond
+dbQueryMain (DecoderDrafts    sql role) req respond = dbQuery role someDraftsDecoder sql req respond   
+dbQueryMain (EncoderDrafts    sql data1)req respond = dbQueryInsert data1 sql someDraftsEncoder req respond
+dbQueryMain (DecoderMe        sql role) req respond = dbQuery role  someUsersDecoderNotNested sql req respond
+dbQueryMain (EncoderTags      sql data1)req respond = dbQueryInsert data1 sql someTagsEncoderNotNested req respond
+dbQueryMain (DecoderTags      sql role) req respond = dbQuery role someTagsDecoderNotNested sql req respond   
+dbQueryMain (EncoderCategories sql data1)req respond= dbQueryInsert data1 sql someCategoriesEncoder req respond
+dbQueryMain (DecoderCategories sql role)req respond = dbQuery role someCategoriesDecoderNotNested sql req respond   
+dbQueryMain (EncoderNoParams  sql)      req respond = dbQueryInsert () sql HE.noParams req respond  
+dbQueryMain (Error message)             req respond = respond $ responseNotFoundJSON $ encode message
+
+   
 dbQuery :: ToJSON a => String -> HD.Result (Vector a) -> BS.ByteString -> Application
 dbQuery role dec sql req respond = do
-  res <- connectToDB role (BS.pack ((BS.unpack sql) ++ limitOffset req)) dec
-  (respond $
-   responseOkJSON
-     (case res of
-        _ -> encode res))
+  res <- connectToDB role (BS.pack (BS.unpack sql ++ limitOffset req)) dec
+  respond $ responseOkJSON $ encode res
         
 limitOffset :: Request -> String
 limitOffset req = fromJust $ fmap (show . (5 *)) (readMaybe (pagin req)::Maybe Int)
         where fromJust Nothing  =""
               fromJust (Just x) =  " LIMIT 5 OFFSET " ++ x
+
 pagin :: Request -> String
 pagin req = (DT.unpack $ last $ Prelude.take 2 $ (pathInfo req)) 
 
 dbQueryInsert :: ToJSON a => a -> BS.ByteString -> HE.Params a -> Application
 dbQueryInsert data1 sql enc req respond = do
   res <- connectToDB2 data1 sql enc
-  (respond $
-   responseOkJSON
-     (case rawQueryString req of
-        _ -> encode res))
+  respond $ responseOkJSON $ encode res
 
-routeRegistration :: ByteString -> Application
-routeRegistration role req respond = 
+
+routeRegistration :: ByteString -> Request -> Route
+routeRegistration role req = 
   case requestMethod req of
     "POST" -> case fmap join (lookupStuff ["login", "password"] req) of
               (Just login:Just password:_) -> 
-                dbQueryReg (toString role)
-                ((toString . fromStrict) login)
+                RouteRegistration
+                (toString role)
+                (toString $ fromStrict login)
                 (LogInUp
                    { user_id_reg = 0
                    , login = (DT.pack . toString . fromStrict) login
@@ -151,26 +157,14 @@ routeRegistration role req respond =
                    , token = ""
                    })
                 insertSqlRegistr
-                someLogInUpEncoder
-                req
-                respond
-              _ -> respond $
-                   responseNotFoundJSON $
-                   encode $ statusError $ Just "error : no query (registration)" 
-    _ -> respond $
-         responseNotFoundJSON $
-         encode $ statusError $ Just "error : problem with Method (registration)"
+              _ -> Error ""
+    _ -> Error ""
+
 
 dbQueryReg role log data1 sql enc req respond = do
   res1 <- connectToDB2 data1 sql enc
   id1  <- connectToDB role (BS.pack $ "SELECT user_id FROM registration WHERE login = '" ++ log ++ "'") (HD.rowVector $ Types.Integer1 <$> (HD.column (HD.nonNullable $ fromIntegral <$> HD.int8)))        
-  res2 <- connectToDB2  data1 (BS.pack $ "UPDATE registration SET token = '" ++ (DT.unpack $ createToken $ int <$> (getId id1)) ++ "' WHERE user_id = " ++ (fromMaybe $ getId id1)) enc        
-  print "-------------------"
-  print log
-  print "-------------------"
-  print id1
-  print "-------------------"
-  print res1
+  _    <- connectToDB2  data1 (BS.pack $ "UPDATE registration SET token = '" ++ (DT.unpack $ createToken $ int <$> (getId id1)) ++ "' WHERE user_id = " ++ (fromMaybe $ getId id1)) enc        
   (respond $
    responseOkJSON
      (case rawQueryString req of
@@ -189,248 +183,169 @@ dbQueryReg role log data1 sql enc req respond = do
 insertSqlRegistr :: BS.ByteString
 insertSqlRegistr = BS.pack "INSERT INTO registration(user_id,login,password,token) VALUES(DEFAULT,$2,$3,'')"
 
-routeLogin :: ByteString -> Application
-routeLogin role req respond = 
-  case queryString req of
-    [("login",Just login),("password",Just password)] -> dbQuery (toString role) (HD.rowVector $ Types.Text1 <$> (HD.column (HD.nonNullable HD.text))) 
-                                               (BS.pack $ "SELECT token FROM registration WHERE login = '" ++ BS.unpack login ++ "' AND password = '" ++ BS.unpack password ++ "'") req respond
-    _ -> respond $
-         responseNotFoundJSON $
-         encode $ statusError $ Just "error : no query (Login)"
 
-routeNews :: ByteString -> Application
-routeNews role req respond =
+routeLogin role req = 
+  case queryString req of
+    [("login",Just login),("password",Just password)] -> DecoderLogInUp (selectSQLtoken login password) (toString role)    
+    _ -> Error ""
+    
+selectSQLtoken :: BS.ByteString -> BS.ByteString -> BS.ByteString
+selectSQLtoken login password = BS.pack $ "SELECT token FROM registration WHERE login = '" ++ BS.unpack login ++ "' AND password = '" ++ BS.unpack password ++ "'"
+
+routeNews role req =
   case pathInfo req of
     [_,_, "news"] ->
-      dbQuery (toString role)
-        someNewsDecoder
-        (BS.pack $ selectSqlNews ++ " ORDER BY nn.id_of_new DESC")
-        req
-        respond
+      DecoderNews (BS.pack $ selectSqlNews ++ " ORDER BY nn.id_of_new DESC")
+      (toString role)
     [_,_, "news", "filter"] ->
       case queryString req of
         ("date_of_create_at_gt", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
-            (BS.pack $
+          DecoderNews 
+          (BS.pack $
              selectSqlNews ++
              "AND nn.date_of_create > '" ++ BS.unpack x ++ "' ")
-            req
-            respond
+          (toString role)
         ("date_of_create_at_lt", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
-            (BS.pack $
+          DecoderNews 
+          (BS.pack $
              selectSqlNews ++
              "AND nn.date_of_create < '" ++ BS.unpack x ++ "' ")
-            req
-            respond
+          (toString role)
         ("name_of_autor", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder 
-            (BS.pack $
+          DecoderNews             (BS.pack $
              selectSqlNews ++
              "AND ((nn.a).u).first_name = '" ++ BS.unpack x ++ "' ")
-            req
-            respond
+          (toString role)
         ("category", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
-            (BS.pack $
+          DecoderNews             (BS.pack $
              selectSqlNews ++
              "AND (nn.categories).category_id = '" ++ BS.unpack x ++ "'  ")
-            req
-            respond
+          (toString role)
         ("tag", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
-            (BS.pack $
+          DecoderNews
+              (BS.pack $
              "SELECT * FROM nestednews nn, unnest(nn.tags) as unntag WHERE unntag.tag_id=" ++
              BS.unpack x)
-            req
-            respond
+         (toString role)
         ("tag_in", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
-            (BS.pack $
+          DecoderNews
+          (BS.pack $
              "SELECT * FROM nestednews nn, unnest(nn.tags) as unntag WHERE unntag.tag_id = ANY(ARRAY" ++
              BS.unpack x ++ ")")
-            req
-            respond
+          (toString role)
         ("tag_all", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
+          DecoderNews
             (BS.pack $
              "SELECT * FROM nestednews nn, unnest(nn.tags) as unntag WHERE unntag.tag_id = ALL(ARRAY" ++
              BS.unpack x ++ "::integer[]) ")
-            req
-            respond
+          (toString role) 
         ("name", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
-            (BS.pack $
+          DecoderNews
+          (BS.pack $
              selectSqlNews ++
              "AND (nn.name) LIKE ('%" ++ BS.unpack x ++ "%'::text)  ")
-            req
-            respond
+          (toString role)   
         ("text_of_new", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
-            (BS.pack $
-             selectSqlNews ++
-             "AND (nn.text_of_new) LIKE ('%" ++ BS.unpack x ++ "%'::text) ")
-            req
-            respond
+          DecoderNews
+          (BS.pack $
+            selectSqlNews ++
+            "AND (nn.text_of_new) LIKE ('%" ++ BS.unpack x ++ "%'::text) ")
+         (toString role)
         ("id_of_new", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
-            (BS.pack $
+          DecoderNews     
+          (BS.pack $
              selectSqlNews ++ "AND nn.id_of_new= " ++ BS.unpack x ++ " ")
-            req
-            respond
-        _ ->
-          respond $
-          responseNotFoundJSON $
-          encode $ statusError $ Just "error : no query filter (news)"
+          (toString role)
+        _ -> Error ""
     {----------------------------------------------------------------}
     [_,_, "news", "order"] ->
       case queryString req of
         ("date_of_create", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
-            (BS.pack $
+          DecoderNews
+          (BS.pack $
              selectSqlNews ++
              " ORDER BY nn.date_of_create " ++ BS.unpack x)
-            req
-            respond
+          (toString role)
         ("name_of_autor", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
+          DecoderNews 
             (BS.pack $
              selectSqlNews ++
              " ORDER BY ((nn.a).u).first_name " ++ BS.unpack x)
-            req
-            respond
+            (toString role)
         ("category", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder 
+          DecoderNews
             (BS.pack $
              selectSqlNews ++
              " ORDER BY (nn.categories).category_name " ++ BS.unpack x)
-            req
-            respond
+            (toString role) 
         ("amount_of_photo", Just "DESC"):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
+          DecoderNews 
             (BS.pack $ selectSqlNews ++ " ORDER BY array_length(images,2)")
-            req
-            respond
+            (toString role)
         ("amount_of_photo", Just "ASC"):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
+          DecoderNews 
             (BS.pack $ selectSqlNews ++ " ORDER BY array_length(images,1)")
-            req
-            respond
-        _ ->
-          respond $
-          responseNotFoundJSON $
-          encode $ statusError $ Just "error : no query order (news)"
+            (toString role)
+        _ -> Error ""
     {----------------------------------------------------------------}
     [_,_, "news", "search"] ->
       case queryString req of
         ("content", Just x):_ ->
-          dbQuery (toString role)
-            someNewsDecoder
+          DecoderNews 
             (BS.pack $
              "SELECT * FROM nestedNewsSearch('%" ++ BS.unpack x ++ "%')")
-            req
-            respond
-        _ ->
-          respond $
-          responseNotFoundJSON $
-          encode $ statusError $ Just "error : no query search (news)"
+            (toString role)
+        _ -> Error ""
     {----------------------------------------------------------------}
-    _ ->
-      respond $
-      responseNotFoundJSON $
-      encode $ statusError $ Just "error: path or query news"
+    _ -> Error ""
 
 selectSqlNews :: String
 selectSqlNews = "SELECT * FROM nestednews nn WHERE true "
 
-routeAutors :: ByteString -> Application
-routeAutors role req respond =
+
+routeAutors role req =
   case role of
     "\"Admin\"" ->
       case requestMethod req of
         "GET" ->
-          dbQuery (toString role)
-            someAutorsDecoderNotNested
+          DecoderAutors 
             (BS.pack "SELECT * FROM nestedautor")
-            req
-            respond
+            (toString role)
           {----------------------------------------------------------------}
         "POST" ->
           case fmap join (lookupStuff ["user_id", "description"] req) of
             [Just x, y] ->
-              dbQueryInsert
+              EncoderAutors
+                insertsqlAutor
                 (AutorsEncoder
                    { user_id_autors_en = read (BS.unpack x) :: Integer
                    , description_en = fmap (DT.pack . toString . fromStrict) y
                    })
-                insertsqlAutor
-                someAutorsEncoder
-                req
-                respond
-            _ ->
-              respond $
-              responseNotFoundJSON $
-              encode $
-              statusError $ Just "error: Problem with queryString (autors) POST"
+            _ -> Error ""
           {----------------------------------------------------------------}
         "DELETE" ->
           case queryString req of
             ([("user_id", Just x)]) ->
-              dbQueryInsert
+              EncoderAutors
+                deletesqlAutor
                 (AutorsEncoder
                    { user_id_autors_en = (read . toString . fromStrict) x
                    , description_en = Nothing
                    })
-                deletesqlAutor
-                someAutorsEncoder
-                req
-                respond
-            _ ->
-              respond $
-              responseNotFoundJSON $
-              encode $
-              statusError $
-              Just "error: Problem with queryString (autors) DELETE"
+            _ -> Error ""
         "PUT" ->
           case queryString req of
             ([("description", x), ("user_id", Just desc)]) ->
-              dbQueryInsert
+              EncoderAutors
+                putAutors
                 (AutorsEncoder
                    { user_id_autors_en = (read . toString . fromStrict) desc
                    , description_en = fmap (DT.pack . toString . fromStrict) x
                    })
-                putAutors
-                someAutorsEncoder
-                req
-                respond
-            _ ->
-              respond $
-              responseNotFoundJSON $
-              encode $
-              statusError $
-              Just "error: Problem with queryString (autors) PUT"
-        _ ->
-          respond $
-          responseNotFoundJSON $
-          encode $
-          statusError $ Just "error: Problem with rqstMethod (autors) DELETE"
+            _ -> Error ""
+        _ -> Error ""
   {------------------------------------------------------------}
-    _ -> respond $ responseNotFoundJSON $ B.pack $ "role is " ++ (B.unpack role)
+    _ -> Error ""
 
 putAutors,insertsqlAutor,deletesqlAutor :: BS.ByteString
 putAutors = BS.pack "UPDATE autors SET description = $1 WHERE user_id=$2"
@@ -439,20 +354,18 @@ insertsqlAutor = BS.pack "INSERT INTO autors(user_id, description) VALUES ($2,$1
 
 deletesqlAutor = BS.pack "DELETE FROM autors WHERE user_id = $2"
 
-routeCategory :: ByteString -> Application
-routeCategory role req respond
+routeCategory role req 
   | requestMethod req == "GET" =
-    dbQuery (toString role)
-      someCategoriesDecoderNotNested
+    DecoderCategories 
       ("SELECT * FROM categories")
-      req
-      respond
+      (toString role)
   | role == "\"Admin\"" =
     case requestMethod req of
       "POST" ->
         case fmap join (lookupStuff ["parent_id", "category_name"] req) of
           (catId:Just catName:_) ->
-            dbQueryInsert
+            EncoderCategories
+              "INSERT INTO categories(child_id,category_name,category_id) VALUES ($1,$2,DEFAULT)"
               (Category
                  { parent_id =
                      fmap
@@ -461,32 +374,18 @@ routeCategory role req respond
                  , category_name = DT.pack $ toString $ fromStrict $ catName
                  , category_id = 0
                  })
-              "INSERT INTO categories(child_id,category_name,category_id) VALUES ($1,$2,DEFAULT)"
-              someCategoriesEncoder
-              req
-              respond
-          _ ->
-            respond $
-            responseNotFoundJSON $
-            encode $ statusError $ Just "Problem with no query (category) POST"
+          _ ->Error ""
       "DELETE" ->
         case join $ Prelude.lookup "category_id" (queryString req) of
           (Just category) ->
-            dbQueryInsert
-              ()
-              (BS.pack $
-               "DELETE FROM categories WHERE category_id = " ++ BS.unpack category)
-              HE.noParams
-              req
-              respond
-          _ ->
-            respond $
-            responseNotFoundJSON $
-            encode $ statusError $ Just "Problem with no query (users) DELETE"
+            EncoderNoParams
+              (BS.pack $ "DELETE FROM categories WHERE category_id = " ++ BS.unpack category)
+          _ -> Error ""
       "PUT" ->
         case fmap join (lookupStuff ["category_id", "category_name","parent_id"] req) of
           (Just categoryId:Just categoryText:prntId:_) ->
-            dbQueryInsert
+            EncoderCategories
+              "UPDATE categories SET category_name = $2, child_id = $1 WHERE category_id=$3"
               (Category
                  { parent_id = fmap ((\x -> read x :: Integer) . toString . fromStrict) prntId
                  , category_name =
@@ -495,107 +394,64 @@ routeCategory role req respond
                      ((\x -> read x :: Integer) . toString . fromStrict)
                        categoryId
                  })
-              ("UPDATE categories SET category_name = $2, child_id = $1 WHERE category_id=$3")
-              (someCategoriesEncoder)
-              req
-              respond
-          _ ->
-            respond $
-            responseNotFoundJSON $
-            encode $ statusError $ Just "Problem with no query (category) PUT"
-      _ -> respond $ responseNotFoundJSON $  "Problem with reqMethod (category)"
-  | otherwise =
-    respond $
-    responseNotFoundJSON $
-    encode $ statusError $ Just "Problem with role or rqstMethod (category)"
+          _ -> Error ""
+      _ -> Error ""
+  | otherwise = Error ""
 
-routeTags :: ByteString -> Application
-routeTags role req respond
+routeTags role req
     | requestMethod req == "GET" =
-        dbQuery (toString role)
-        someTagsDecoderNotNested
+        DecoderTags 
         "SELECT * FROM tags"
-        req
-        respond
+        (toString role)
     | role == "\"Admin\"" =
       case requestMethod req of 
         "POST" ->
             case fmap join (lookupStuff ["text_of_tag"] req) of
               [Just tag] ->
-                dbQueryInsert
+                EncoderTags
+                "INSERT INTO tags(tag_name,tag_id) VALUES ($1,DEFAULT)"
                 (Tags {tag_name = (DT.pack . BS.unpack) tag, tag_id = 0})
-                ("INSERT INTO tags(tag_name,tag_id) VALUES ($1,DEFAULT)")
-                (someTagsEncoderNotNested)
-                req
-                respond
-              _ ->
-                respond $
-                responseNotFoundJSON $
-                encode $ statusError $ Just "Problem with no query (tags) POST"
+              _ -> Error ""
         "DELETE" ->
             case join $ Prelude.lookup "tag_id" (queryString req) of
               (Just tag) ->
-                dbQueryInsert
-                ()
+                EncoderNoParams
                 (BS.pack $ "DELETE FROM users WHERE user_id = " ++ BS.unpack tag)
-                HE.noParams
-                req
-                respond
-              _ ->
-                respond $
-                responseNotFoundJSON $
-                encode $ statusError $ Just $ "Problem with no query (tags) DELETE"
+              _ -> Error ""
         "PUT" ->
           case fmap join (lookupStuff ["tag_id", "text_of_tag"] req) of
             (Just tagId:Just tagText:_) ->
-              dbQueryInsert
+              EncoderTags
+              "UPDATE tags SET tag_name = $1 WHERE tag_id=$2"
               (Tags
               { tag_name = DT.pack $ toString $ fromStrict $ tagText
               , tag_id =((\x -> read x :: Integer) . toString . fromStrict) tagId
               })
-              ("UPDATE tags SET tag_name = $1 WHERE tag_id=$2")
-              (someTagsEncoderNotNested)
-              req
-              respond
-            _ ->
-              respond $
-              responseNotFoundJSON $
-              encode $ statusError $ Just "Problem with no query (tags) DELETE"
-        _ -> respond $ responseNotFoundJSON $ role
-    | otherwise =
-      respond $
-      responseNotFoundJSON $
-      encode $ statusError $ Just "Problem with reqMethod or query (tags)"
+            _ -> Error ""
+        _ -> Error ""
+    | otherwise = Error ""
 
-routeDrafts :: ByteString -> Application
-routeDrafts role req respond =
+routeDrafts role req =
   case role of
     "\"Autor\"" ->
       case pathInfo req of
                 --WARNING
-        (_:"drafts":"publish":_) ->
+        {-(_:"drafts":"publish":_) ->
           case (Prelude.lookup "id_of_draft" (queryString req)) of
             (Just x) -> dbQueryInsert () insertsqlNews HE.noParams req respond
-            _ ->
-              respond $
-              responseNotFoundJSON $
-              encode $
-              statusError $
-              Just "error: Problem with queryString (drafts) publish POST"
-                {---------------------------------------------}
+            _ -> Error ""
+        -}        {---------------------------------------------}
         _ ->
           case requestMethod req of
             "GET" ->
-              dbQuery (toString role)
-                someDraftsDecoder
-                (selectsqlDraft req)
-                req
-                respond
+              DecoderDrafts 
+                (selectsqlDraft req) (toString role)
                           {-----------------------------------------------------------------}
             "POST" ->
               case fmap join (lookupStuff ["text_of_draft","category_id","photo"] req) of
                 [txt,Just cat,pht] ->
-                  dbQueryInsert
+                  EncoderDrafts
+                    insertsqlDraft
                     (Draft
                        { id_of_user = read $ getId req
                        , text_of_draft = fmap (DT.pack . toString . fromStrict) txt
@@ -603,21 +459,13 @@ routeDrafts role req respond =
                        , category_id_draft = (read . BS.unpack) cat :: Integer
                        , photo_draft = fmap (DT.pack . BS.unpack)pht
                        })
-                    insertsqlDraft
-                    someDraftsEncoder
-                    req
-                    respond
-                _ ->
-                  respond $
-                  responseNotFoundJSON $
-                  encode $
-                  statusError $
-                  Just "error: Problem with queryString (drafts) POST"
+                _ -> Error ""
                           {----------------------------------------------------------------------}
             "PUT" ->
               case fmap join (lookupStuff ["draft_id","text_of_draft","category_id","photo"] req) of
                 [Just id1,txt,Just cat,pht] ->
-                  dbQueryInsert
+                  EncoderDrafts
+                    updateqlDraft                    
                     (Draft
                        { id_of_user = read $ getId req
                        , text_of_draft = fmap (DT.pack . toString . fromStrict) txt
@@ -625,29 +473,15 @@ routeDrafts role req respond =
                        , category_id_draft = (read . BS.unpack) cat :: Integer
                        , photo_draft = fmap (DT.pack . BS.unpack)pht
                        })
-                    updateqlDraft
-                    someDraftsEncoder
-                    req
-                    respond
-                _ ->
-                  respond $
-                  responseNotFoundJSON $
-                  encode $
-                  statusError $
-                  Just "error: Problem with queryString (drafts) PUT"
+                _ -> Error ""
                           {----------------------------------------------------------------------}
             "DELETE" ->
               case fmap join (lookupStuff ["id_of_draft"] req) of
                 [Just x] ->
-                  dbQueryInsert () (deleteSqlDraft req) HE.noParams req respond
-                _ ->
-                  respond $
-                  responseNotFoundJSON $
-                  encode $
-                  statusError $
-                  Just "error: Problem with queryString (drafts) DELETE"
+                  EncoderNoParams (deleteSqlDraft req)
+                _ -> Error ""
           {------------------------------------------}
-    _ -> respond $ responseNotFoundJSON $ role
+    _ -> Error ""
 
 {-query for drafts-}
 insertsqlDraft,updateqlDraft,insertsqlNews :: BS.ByteString
@@ -670,31 +504,22 @@ selectsqlDraft req =
 
 {-------------------------------}
 
-routeMe :: ByteString -> Application
-routeMe role req respond 
+routeMe role req 
   | requestMethod req == "GET" =
-        dbQuery (toString role)
-          someUsersDecoderNotNested
-          (selectSqlUserid $ getId req)
-          req
-          respond
-  | otherwise =
-    respond $
-    responseNotFoundJSON $
-    encode $ statusError $ Just "Problem with reqMethod (Me)"
+        DecoderMe (selectSqlUserid $ getId req)
+        (toString role)
+  | otherwise = Error ""
 
-routeUsers :: ByteString -> Application
-routeUsers role req respond
+
+routeUsers role req
   | requestMethod req == "GET" =
-        dbQuery (toString role)
-          (someUsersDecoderNotNested)
-          (selectSqlUser)
-          req
-          respond
+        DecoderUsers 
+        selectSqlUser (toString role)
   | requestMethod req == "PUT" =
     case fmap join (lookupStuff ["first_name", "second_name", "image"] req) of
       [first, second, image] ->
-        dbQueryInsert
+        EncoderUsers
+        updateSqlUser
           (Users
              { image = fmap (DT.pack . BS.unpack) image
              , date_of_create_user = fromGregorian 0 0 0
@@ -702,29 +527,16 @@ routeUsers role req respond
              , first_name = fmap (DT.pack . BS.unpack) first
              , second_name = fmap (DT.pack . BS.unpack) second
              })
-          updateSqlUser
-          someUsersEncoder
-          req
-          respond
-      _ ->
-        respond $
-        responseNotFoundJSON $
-        encode $ statusError $ Just "Problem with no query (users) PUT"
+      _ -> Error ""
   | requestMethod req == "DELETE" =
     case role of
       "\"Admin\"" ->
         case join $ Prelude.lookup "user_id" (queryString req) of
           (Just user) ->
-            dbQueryInsert () (deleteSqlUser $ BS.unpack user) HE.noParams req respond
-          _ ->
-            respond $
-            responseNotFoundJSON $
-            encode $ statusError $ Just "Problem with no query (users) DELETE"
-      _ -> respond $ responseNotFoundJSON $ role
-  | otherwise =
-    respond $
-    responseNotFoundJSON $
-    encode $ statusError $ Just "Problem with reqMethod (users)"
+            EncoderNoParams (deleteSqlUser $ BS.unpack user)
+          _ -> Error ""
+      _ -> Error ""
+  | otherwise = Error ""
 
 selectSqlUser,insertsqlUsers,updateSqlUser :: BS.ByteString
 selectSqlUser = BS.pack "SELECT * FROM users"
@@ -740,67 +552,36 @@ deleteSqlUser user =
   BS.pack $ "DELETE FROM registration WHERE user_id = " ++ user 
 
 
-routeComments :: Text -> ByteString -> Application
-routeComments idNew role req respond
+
+routeComments idNew role req
   | requestMethod req == "GET" =
-    dbQuery (toString role)
-      someCommentsDecoderNotNested
-      (selectSqlComment $ DT.unpack idNew)
-      req
-      respond
+    DecoderComments (selectSqlComment $ DT.unpack idNew)    
+    (toString role)
       {----------------------------------------------------------------------------}
   | requestMethod req == "DELETE" =
     case join (Prelude.lookup "id_of_comment" (queryString req)) of
       (Just idComment) ->
         case role of
           "\"Admin\"" ->
-            dbQueryInsert
-              ()
+            EncoderNoParams
               (deleteSqlComment1 $ BS.unpack idComment)
-              HE.noParams
-              req
-              respond
-          "\"Autor\"" ->
-            dbQuery (toString role)
-              someCommentsDecoderNotNested
-              (deleteSqlComment2 (BS.unpack idComment) $ getId req)
-              req
-              respond
-          _ ->
-            respond $
-            responseNotFoundJSON $
-            encode $
-            statusError $ Just "error: Problem with role (comments) DELETE"
-      _ ->
-        respond $
-        responseNotFoundJSON $
-        encode $
-        statusError $ Just "error: Problem with queryString (comments) DELETE"
+          _ -> Error ""
+      _ -> Error ""
       {----------------------------------------------------------------------------}
   | requestMethod req == "POST" =
     case join (Prelude.lookup "text_of_comment" (queryString req)) of
       (Just comment) ->
-        dbQueryInsert
+        EncoderComments
+          insertSqlComment
           (CommentsNotNested
              { id_of_comment_nt = 0
              , user_id_comment_nt = read $ getId req
              , id_of_new_comment_nt = read $ DT.unpack idNew
              , text_of_comment_nt = DT.pack $ BS.unpack comment
              })
-          (insertSqlComment)
-          someCommentsEncoderNotNested
-          req
-          respond
-      _ ->
-        respond $
-        responseNotFoundJSON $
-        encode $
-        statusError $ Just "error: Problem with queryString (comments) POST"
+      _ -> Error ""
       {----------------------------------------------------------------------------}
-  | otherwise =
-    respond $
-    responseNotFoundJSON $
-    encode $ statusError $ Just "error: Problem with rqstMethod (comments)"
+  | otherwise = Error ""
 
 deleteSqlComment1,selectSqlComment :: String -> BS.ByteString
 deleteSqlComment1 idOfComment =
@@ -818,17 +599,11 @@ insertSqlComment :: BS.ByteString
 insertSqlComment =
   BS.pack "INSERT INTO comments(id_of_comment,id_of_user,id_of_new,text_of_comment) VALUES (DEFAULT,$2,$3,$4)"
 
-getId req = fromMaybe (fmap (Prelude.lookup "user_id") $ jwtCheck (route req))
-
-fromMaybe :: ToJSON a => Maybe (Maybe a) -> String
-fromMaybe (Just (Just x)) = toString $ DA.encode x
-fromMaybe _               = ""
 
 lookupStuff :: [BS.ByteString] -> Request -> [Maybe (Maybe BS.ByteString)]
 lookupStuff [] _ = []
 lookupStuff (stuff:s) lst =
   (Prelude.lookup stuff $ queryString lst) : (lookupStuff s lst)
-
 
 
 responseOkJSON, responseNotFoundJSON, responseBadRequestJSON ::

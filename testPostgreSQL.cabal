@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: a10f88f9d901a054ec8d04f020b25a6b992d8a90849d5a67ca1688d3d32c7779
+-- hash: 306d018075c3d0095b26f75a8d479a1a9e5c5794748230f619feb12301bd54c4
 
 name:           testPostgreSQL
 version:        0.1.0.0
@@ -58,6 +58,7 @@ executable testPostgreSQL-exe
   other-modules:
       API
       DB
+      JWT
       Logging.Entiry
       Logging.File
       Logging.Level
