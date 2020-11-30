@@ -24,6 +24,7 @@ import Data.Functor.Contravariant
 import Data.Aeson (ToJSON, encode)
 import qualified Data.Vector as DV
 import qualified Data.Text as DT
+import Data.Foldable (Foldable(foldl'))
 
 {------------------------------------}
 
@@ -70,16 +71,29 @@ selectTasksStatement sql dec =
 
 
 {-Encoder for type News-}
+someNewsEncoderNotNested :: HE.Params NewsEncoderNotNested
+someNewsEncoderNotNested = 
+          (name_not >$< HE.param (HE.nonNullable HE.text)) <>
+          (text_of_new_not >$< HE.param (HE.nullable HE.text)) <>
+          (category_not  >$< HE.param (HE.nonNullable $ contramap fromIntegral HE.int8)) <>
+          (photo_not >$< HE.param (HE.nullable HE.text)) <>
+          (fromIntegral . autor_id_not >$< HE.param (HE.nonNullable HE.int8)) 
+
+
 someNewsEncoder :: HE.Params NewsEncoder
 someNewsEncoder = 
-          (name_en >$< HE.param (HE.nonNullable HE.text)) <>
-          (fromIntegral . category_en >$< HE.param (HE.nonNullable HE.int8)) <> 
-          (tags_en >$< someTagsEncoder) <>
+          (fromIntegral . draft_id >$< HE.param (HE.nonNullable HE.int8)) <>
+          (name_en >$< HE.param (HE.nullable HE.text)) <>
           (text_of_new_en >$< HE.param (HE.nullable HE.text)) <>
-          (fromIntegral . id_of_new_en >$< HE.param (HE.nonNullable HE.int8)) <> 
-          (fromIntegral . autor_id_en >$< HE.param (HE.nonNullable HE.int8)) <> 
-          (date_of_create_new_en >$< HE.param (HE.nullable HE.date))          
-         
+          (category_en  >$< HE.param (HE.nullable $ contramap fromIntegral HE.int8)) <>
+          (photo_en >$< HE.param (HE.nullable HE.text)) <>
+          (images_en >$< HE.param (HE.nullable $ HE.array $ HE.dimension foldl' $ HE.element $ HE.nonNullable $ contramap fromIntegral HE.int8)) <>
+          (tags_en >$< HE.param (HE.nullable $ HE.array $ HE.dimension foldl' $ HE.element $ HE.nonNullable $ contramap fromIntegral HE.int8))
+
+
+
+
+          
 {-Decoder-}
 someNewsDecoder :: HD.Result (Vector News)
 someNewsDecoder =  HD.rowVector $ Types.News <$> 
@@ -117,7 +131,7 @@ someAutorsDecoderNotNested = HD.rowVector $ Types.Autors <$>
 
 
 
-{-Encoder for type Category-}
+{-Encoder for type Tags-}
 someTagsEncoder :: HE.Params (Vector Tags)
 someTagsEncoder = 
         (HE.param $ HE.nonNullable $ fmap tag_name >$< HE.foldableArray (HE.nonNullable HE.text)) <>
@@ -144,20 +158,21 @@ someTagsEncoderNotNested =
 {-Encoder for type Category-}
 someImageEncoder :: HE.Params (Vector Images)
 someImageEncoder = 
-        (HE.param $ HE.nonNullable $ fmap id_of_image >$< HE.foldableArray (HE.nonNullable HE.text)) <>
-        (HE.param $ HE.nonNullable $ (fmap image_new) >$< HE.foldableArray (HE.nonNullable $ contramap fromIntegral HE.int8)) 
-          
+        (HE.param $ HE.nonNullable $ (fmap id_of_image) >$< HE.foldableArray (HE.nonNullable $ contramap fromIntegral HE.int8)) <>
+        (HE.param $ HE.nonNullable $ fmap id_of_new_img >$< HE.foldableArray (HE.nonNullable $ contramap fromIntegral HE.int8)) <>
+        (HE.param $ HE.nonNullable $ fmap image_new >$< HE.foldableArray (HE.nonNullable HE.text))   
 {-Decoder-}
 someImageDecoder :: HD.Value (Vector (Maybe Images))
 someImageDecoder = HD.vectorArray $ HD.nullable $ HD.composite $ Types.Images <$>
           (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*>
+          (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*>
           (HD.field (HD.nonNullable HD.text)) 
-
+          
 
 {-Encoder for type Users-}
 someUsersEncoder :: HE.Params (Users)
 someUsersEncoder = 
-          (image >$< HE.param (HE.nullable $ contramap encodeTextToBS HE.bytea)) <>
+          (image >$< HE.param (HE.nullable HE.text)) <>
           (date_of_create_user >$< HE.param (HE.nonNullable HE.date)) <>
           (user_id >$< HE.param (HE.nonNullable $ contramap fromIntegral HE.int8)) <>
           (first_name >$< HE.param (HE.nullable HE.text)) <>
@@ -170,7 +185,7 @@ someUsersDecoder =  HD.composite $ Types.Users <$>
           (HD.field (HD.nullable HD.text)) <*>
           (HD.field (HD.nullable HD.text)) <*>
           (fromIntegral <$> (HD.field (HD.nonNullable HD.int8))) <*>
-          (HD.field (HD.nullable $ decodeBSToText <$> HD.bytea))
+          (HD.field (HD.nullable HD.text))
 
 {-Decoder for NotNested-}
 someUsersDecoderNotNested :: HD.Result (Vector Users)
@@ -179,7 +194,7 @@ someUsersDecoderNotNested =  HD.rowVector $ Types.Users <$>
           (HD.column (HD.nullable HD.text)) <*>
           (HD.column(HD.nullable HD.text)) <*>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
-          (HD.column (HD.nullable $ decodeBSToText <$> HD.bytea)) 
+          (HD.column (HD.nullable HD.text)) 
           
 {-Encoder for type Comment-}
 someCommentsEncoder :: HE.Params Comments                      
@@ -213,24 +228,7 @@ someCommentsDecoderNotNested = HD.rowVector $ Types.CommentsNotNested <$>
           (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
           (HD.column (HD.nonNullable HD.text)) 
           
-{-Encoder for type Draft-}
-someDraftsEncoder :: HE.Params Draft                      
-someDraftsEncoder = 
-          (fromIntegral . id_of_user  >$< HE.param (HE.nonNullable HE.int8)) <>
-          (text_of_draft >$< HE.param (HE.nullable HE.text)) <>
-          (fromIntegral . id_of_draft >$< HE.param (HE.nonNullable HE.int8)) <>
-          (fromIntegral . category_id_draft  >$< HE.param (HE.nonNullable HE.int8)) <>
-          (photo_draft >$< HE.param (HE.nullable HE.text)) 
-          
-          
-{-Decoder-}
-someDraftsDecoder :: HD.Result (Vector Draft)
-someDraftsDecoder = HD.rowVector $ Types.Draft <$>
-          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
-          (HD.column (HD.nullable HD.text)) <*>
-          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
-          (fromIntegral <$> (HD.column (HD.nonNullable HD.int8))) <*>
-          (HD.column (HD.nullable (fmap (DT.pack . BS.unpack) HD.bytea)))         
+
           
 
 {-Encoder for type Category-}

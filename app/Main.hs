@@ -46,6 +46,7 @@ import Data.Time (fromGregorian)
 import Data.Vector as DV (Vector,head)
 import qualified Data.Map as Map
 import Text.Read ( readMaybe )
+import Types
 
 
 type Role = String
@@ -58,10 +59,10 @@ data Route =
             | DecoderComments  SQL Role 
             | EncoderComments  SQL CommentsNotNested
             | DecoderNews      SQL Role
+            | EncoderNotNestNews SQL NewsEncoderNotNested
+            | EncoderNews      SQL SQL SQL NewsEncoder
             | EncoderAutors    SQL AutorsEncoder
             | DecoderAutors    SQL Role
-            | EncoderDrafts    SQL Draft
-            | DecoderDrafts    SQL Role
             | DecoderMe        SQL Role
             | EncoderUsers     SQL Users
             | DecoderUsers     SQL Role
@@ -102,18 +103,18 @@ routePath req role =
 
 
 dbQueryMain :: Route -> Application
-dbQueryMain (EncoderLogInUp sql data1)  req respond = dbQueryInsert data1 sql someLogInUpEncoder req respond   
 dbQueryMain (DecoderLogInUp sql role)   req respond = dbQuery role (HD.rowVector $ Types.Text1 <$> HD.column (HD.nonNullable HD.text)) sql req respond
+dbQueryMain (EncoderLogInUp sql data1)  req respond = dbQueryInsert data1 sql someLogInUpEncoder req respond   
 dbQueryMain (RouteRegistration role log a sql) req respond = dbQueryReg role log a sql someLogInUpEncoder req respond
 dbQueryMain (DecoderComments  sql role) req respond = dbQuery role someCommentsDecoderNotNested sql req respond
 dbQueryMain (EncoderComments  sql data1)req respond = dbQueryInsert data1 sql someCommentsEncoderNotNested req respond
 dbQueryMain (DecoderNews      sql role) req respond = dbQuery role someNewsDecoder sql req respond
+dbQueryMain (EncoderNotNestNews sql data1)req respond = dbQueryInsert data1 sql someNewsEncoderNotNested req respond
+dbQueryMain (EncoderNews      sql1 sql2 sql3 data1)req respond = dbQueryDrafts data1 sql1 sql2 sql3 someNewsEncoder req respond
 dbQueryMain (DecoderAutors    sql role) req respond = dbQuery role someAutorsDecoderNotNested sql req respond
 dbQueryMain (EncoderAutors    sql data1)req respond = dbQueryInsert data1 sql someAutorsEncoder req respond
 dbQueryMain (DecoderUsers     sql role) req respond = dbQuery role someUsersDecoderNotNested sql req respond   
 dbQueryMain (EncoderUsers     sql data1)req respond = dbQueryInsert data1 sql someUsersEncoder req respond
-dbQueryMain (DecoderDrafts    sql role) req respond = dbQuery role someDraftsDecoder sql req respond   
-dbQueryMain (EncoderDrafts    sql data1)req respond = dbQueryInsert data1 sql someDraftsEncoder req respond
 dbQueryMain (DecoderMe        sql role) req respond = dbQuery role  someUsersDecoderNotNested sql req respond
 dbQueryMain (EncoderTags      sql data1)req respond = dbQueryInsert data1 sql someTagsEncoderNotNested req respond
 dbQueryMain (DecoderTags      sql role) req respond = dbQuery role someTagsDecoderNotNested sql req respond   
@@ -141,6 +142,8 @@ dbQueryInsert data1 sql enc req respond = do
   res <- connectToDB2 data1 sql enc
   respond $ responseOkJSON $ encode res
 
+
+dbQueryPublish = undefined
 
 routeRegistration :: ByteString -> Request -> Route
 routeRegistration role req = 
@@ -435,72 +438,89 @@ routeDrafts role req =
   case role of
     "\"Autor\"" ->
       case pathInfo req of
-                --WARNING
-        {-(_:"drafts":"publish":_) ->
-          case (Prelude.lookup "id_of_draft" (queryString req)) of
-            (Just x) -> dbQueryInsert () insertsqlNews HE.noParams req respond
+        (_:_:"drafts":"publish":_) ->
+          case (join $ Prelude.lookup "id_of_draft" (queryString req)) of
+            (Just x) -> EncoderNoParams (publishsqlNews x)
             _ -> Error ""
-        -}        {---------------------------------------------}
+                {---------------------------------------------}
         _ ->
           case requestMethod req of
-            "GET" ->
-              DecoderDrafts 
-                (selectsqlDraft req) (toString role)
+            "GET" -> DecoderNews (selectsqlDraft req) (toString role)
                           {-----------------------------------------------------------------}
             "POST" ->
-              case fmap join (lookupStuff ["text_of_draft","category_id","photo"] req) of
-                [txt,Just cat,pht] ->
-                  EncoderDrafts
+              case fmap join (lookupStuff ["name","text_of_draft","category_id","photo"] req) of
+                [Just name,txt,Just cat,pht] ->
+                  EncoderNotNestNews
                     insertsqlDraft
-                    (Draft
-                       { id_of_user = read $ getId req
-                       , text_of_draft = fmap (DT.pack . toString . fromStrict) txt
-                       , id_of_draft = 0
-                       , category_id_draft = (read . BS.unpack) cat :: Integer
-                       , photo_draft = fmap (DT.pack . BS.unpack)pht
+                    (NewsEncoderNotNested
+                       { name_not = (DT.pack . BS.unpack) name,
+                         text_of_new_not =fmap (DT.pack . BS.unpack) txt,
+                         category_not = read (BS.unpack cat)::Integer,
+                         photo_not = fmap (DT.pack . BS.unpack) pht,
+                         autor_id_not = read (getId req) :: Integer
                        })
                 _ -> Error ""
                           {----------------------------------------------------------------------}
             "PUT" ->
-              case fmap join (lookupStuff ["draft_id","text_of_draft","category_id","photo"] req) of
-                [Just id1,txt,Just cat,pht] ->
-                  EncoderDrafts
-                    updateqlDraft                    
-                    (Draft
-                       { id_of_user = read $ getId req
-                       , text_of_draft = fmap (DT.pack . toString . fromStrict) txt
-                       , id_of_draft = read (BS.unpack id1) :: Integer
-                       , category_id_draft = (read . BS.unpack) cat :: Integer
-                       , photo_draft = fmap (DT.pack . BS.unpack)pht
+              case fmap join (lookupStuff ["draft_id","name","text_of_draft","category_id","photo","images","tags"] req) of
+                [Just id1,name,txt,cat,pht,img,tgs] ->
+                  EncoderNews
+                    updatesqlDraft
+                    updatesqlImages
+                    updatesqlTags
+                    (NewsEncoder
+                       { draft_id =  read (BS.unpack id1)::Integer,
+                         name_en = fmap (DT.pack . BS.unpack) name,
+                         text_of_new_en =fmap (DT.pack . BS.unpack) txt,
+                         category_en =fmap ((\x -> read x ::Integer) . BS.unpack) cat ,
+                         photo_en = fmap (DT.pack . BS.unpack) pht,
+                         images_en = fmap (\x -> read x::[Integer]) (fmap BS.unpack img),
+                         tags_en = fmap (\x -> read x::[Integer]) (fmap BS.unpack tgs)                       
                        })
                 _ -> Error ""
                           {----------------------------------------------------------------------}
             "DELETE" ->
               case fmap join (lookupStuff ["id_of_draft"] req) of
                 [Just x] ->
-                  EncoderNoParams (deleteSqlDraft req)
+                  EncoderNoParams (deleteSqlDraft x)
                 _ -> Error ""
           {------------------------------------------}
     _ -> Error ""
 
+dbQueryDrafts data1 sql1 sql2 sql3 enc req respond = do
+  res1 <- connectToDB2 data1 sql1 enc
+  res2 <- connectToDB2 data1 sql2 enc
+  res3 <- connectToDB2 data1 sql3 enc
+  (respond $
+   responseOkJSON
+     (case rawQueryString req of
+        _ -> encode res1))
+
 {-query for drafts-}
-insertsqlDraft,updateqlDraft,insertsqlNews :: BS.ByteString
+insertsqlDraft,updatesqlDraft :: BS.ByteString
 insertsqlDraft =
   BS.pack
-    "INSERT INTO drafts(user_id,text_of_draft,id_of_draft,category_id,photo) VALUES ($1,$2,DEFAULT,$4,$5) "
+    "INSERT INTO news(name,text_of_new,id_of_new,date_of_create,category_id,photo,publish,autor_id) VALUES ($1,$2,DEFAULT,DEFAULT,$3,$4,false,$5) "
 
-insertsqlNews =
-  BS.pack ""
+publishsqlNews :: BS.ByteString -> BS.ByteString
+publishsqlNews id_of_new = BS.pack $ "UPDATE news SET publish = true WHERE id_of_new = " ++ BS.unpack id_of_new
 
-updateqlDraft =
-  BS.pack "UPDATE drafts SET text_of_draft = $2, category_id=$4, photo=$5 WHERE id_of_draft=$3 "
+updatesqlDraft =
+  BS.pack "UPDATE news SET name=$2, text_of_new = $3, category_id=$4, photo=$5 WHERE id_of_new=$1 "
 
-deleteSqlDraft,selectsqlDraft :: Request -> BS.ByteString
-deleteSqlDraft req =
-  BS.pack $ "DELETE FROM drafts WHERE id_of_draft = " ++ (getId req)
+updatesqlImages =
+  BS.pack "INSERT into images(id_of_image,id_of_new,image) \
+  \VALUES(DEFAULT,$1,unnest($6))"
+
+updatesqlTags =
+  BS.pack "INSERT into news_tags(new_id,tag_id,global_tag_id) \
+  \VALUES($1,unnest($7),DEFAULT)"
+
+deleteSqlDraft id =
+  BS.pack $ "DELETE FROM drafts WHERE id_of_draft = " ++ BS.unpack id
 
 selectsqlDraft req =
-  BS.pack $ "SELECT * FROM drafts WHERE user_id=" ++ (getId req)
+  BS.pack $ "SELECT * FROM nestednews n WHERE (n.a).u.user_id=" ++ getId req ++ " AND n.publish=false"
 
 {-------------------------------}
 

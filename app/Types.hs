@@ -6,7 +6,6 @@ import Data.Aeson hiding (Result)
 import Data.Time (Day)
 import           GHC.Generics             hiding (from )
 import Data.Vector (Vector)
-import Data.ByteString (ByteString)
 {-----------------------}
 
 data StatusInsert a  = StatusInsert 
@@ -43,7 +42,7 @@ instance ToJSON UsersEncoder where
 
 data News = News 
   { name :: Maybe Text,
-    category :: Maybe (Category),
+    category :: Maybe Category,
     tags :: Maybe (Vector (Maybe Tags)),
     text_of_new :: Maybe Text,
     id_of_new :: Integer,
@@ -58,29 +57,25 @@ data News = News
 instance FromJSON News where
 instance ToJSON News where
 
-data NewsNotNested = NewsNotNested 
-  { name_not :: Maybe Text,
+data NewsEncoderNotNested = NewsEncoderNotNested  
+  { name_not :: Text,
     text_of_new_not :: Maybe Text,
-    autor_id_not :: Maybe Integer,
-    id_of_new_not :: Maybe Integer,
-    date_of_create_new_not :: Maybe Day,
-    category_not :: Maybe Integer,
-    tags_not :: Maybe (Vector Integer),
-    photo_not :: Maybe Text
+    category_not :: Integer,
+    photo_not :: Maybe Text,
+    autor_id_not :: Integer
   } deriving (Show, Generic)
 
-instance FromJSON NewsNotNested where
-instance ToJSON NewsNotNested where
+instance FromJSON NewsEncoderNotNested  where
+instance ToJSON NewsEncoderNotNested  where
 
 data NewsEncoder = NewsEncoder 
-  { name_en :: Text,
-    category_en :: Integer,
-    tags_en :: Vector Tags,
+  { draft_id :: Integer,
+    name_en :: Maybe Text,
     text_of_new_en :: Maybe Text,
-    id_of_new_en :: Integer,
-    autor_id_en :: Integer,
-    date_of_create_new_en :: Maybe Day,
-    photo_en :: Maybe Text
+    category_en :: Maybe Integer,
+    photo_en :: Maybe Text,
+    images_en :: Maybe [Integer],
+    tags_en ::  Maybe [Integer]
   } deriving (Show, Generic)
 
 instance FromJSON NewsEncoder where
@@ -135,23 +130,11 @@ data CommentsNotNested = CommentsNotNested
 instance FromJSON CommentsNotNested where                            
 instance ToJSON CommentsNotNested where
 
-data Draft = Draft
-  { id_of_user    :: Integer,
-    text_of_draft :: Maybe Text,
-    id_of_draft   :: Integer,
-    category_id_draft :: Integer,
-    photo_draft   :: Maybe Text
-  } deriving (Show, Generic)
-instance FromJSON Draft where                            
-instance ToJSON Draft where
-
-
 data Category = Category
   { parent_id      :: Maybe Integer,
     category_name  :: Text,
     category_id    :: Integer
   } deriving (Show, Generic)
-
 
 instance FromJSON Category where                            
 instance ToJSON Category where
@@ -165,8 +148,9 @@ instance FromJSON Tags where
 instance ToJSON Tags where
 
 data Images = Images
-  { image_new    :: Integer,
-    id_of_image  :: Text
+  { id_of_image    :: Integer,
+    id_of_new_img :: Integer,
+    image_new  :: Text
   } deriving (Show, Generic)
 
 instance FromJSON Images where                            
