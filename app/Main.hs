@@ -135,7 +135,9 @@ limitOffset req = fromJust $ fmap (show . (5 *)) (readMaybe (pagin req)::Maybe I
               fromJust (Just x) =  " LIMIT 5 OFFSET " ++ x
 
 pagin :: Request -> String
-pagin req = (DT.unpack $ last $ Prelude.take 2 $ (pathInfo req)) 
+pagin req = (DT.unpack $ lastJust $ Prelude.take 2 $ (pathInfo req)) 
+   where lastJust [] = "0"
+         lastJust x  = last x
 
 dbQueryInsert :: ToJSON a => a -> BS.ByteString -> HE.Params a -> Application
 dbQueryInsert data1 sql enc req respond = do
@@ -500,7 +502,8 @@ dbQueryDrafts data1 sql1 sql2 sql3 enc req respond = do
 insertsqlDraft,updatesqlDraft :: BS.ByteString
 insertsqlDraft =
   BS.pack
-    "INSERT INTO news(name,text_of_new,id_of_new,date_of_create,category_id,photo,publish,autor_id) VALUES ($1,$2,DEFAULT,DEFAULT,$3,$4,false,$5) "
+    "INSERT INTO news(name,text_of_new,id_of_new,date_of_create,category_id,photo,publish,autor_id) \
+    \VALUES ($1,$2,DEFAULT,DEFAULT,$3,$4,false,$5) "
 
 publishsqlNews :: BS.ByteString -> BS.ByteString
 publishsqlNews id_of_new = BS.pack $ "UPDATE news SET publish = true WHERE id_of_new = " ++ BS.unpack id_of_new
@@ -517,7 +520,7 @@ updatesqlTags =
   \VALUES($1,unnest($7),DEFAULT)"
 
 deleteSqlDraft id =
-  BS.pack $ "DELETE FROM drafts WHERE id_of_draft = " ++ BS.unpack id
+  BS.pack $ "DELETE FROM news WHERE id_of_new = " ++ BS.unpack id ++ " AND publish=false"
 
 selectsqlDraft req =
   BS.pack $ "SELECT * FROM nestednews n WHERE (n.a).u.user_id=" ++ getId req ++ " AND n.publish=false"
